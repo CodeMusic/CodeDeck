@@ -1,0 +1,32 @@
+[
+  {
+    "name": "tinydolphin",
+    "file": "tiny-dolphin-2.2-mistral-1.1b.Q4_K_M.gguf",
+    "description": "Chat-optimized model with strong instruction following.",
+    "tags": ["chat", "instruction", "general"]
+  },
+  {
+    "name": "deepseekcoder",
+    "file": "deepseek-coder-1.3b.Q_rq0528.gguf",
+    "description": "Code-oriented LLM with residual quantization for speed.",
+    "tags": ["code", "fast", "logic"]
+  },
+  {
+    "name": "tinyllama",
+    "file": "tinyllama-1.1b-chat.Q4_K_M.gguf",
+    "description": "Ultra-light generalist LLM, perfect fallback option.",
+    "tags": ["fallback", "general", "light"]
+  },
+  {
+    "name": "phi2",
+    "file": "phi-2.Q4_0.gguf",
+    "description": "Small logic/maths-focused model by Microsoft.",
+    "tags": ["math", "reasoning", "logic"]
+  },
+  {
+    "name": "trumpgpt",
+    "file": "trumpgpt.Q4_K_M.gguf",
+    "description": "Character-based LLM, great for roleplay or parody.",
+    "tags": ["character", "roleplay", "fun"]
+  }
+]

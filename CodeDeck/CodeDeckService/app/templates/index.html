@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CodeDeck Neural Interface</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: #2c3e50;
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            margin-bottom: 8px;
+        }
+        
+        .header p {
+            opacity: 0.8;
+            font-size: 14px;
+        }
+        
+        .status-bar {
+            background: #34495e;
+            color: white;
+            padding: 10px 20px;
+            font-size: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #27ae60;
+        }
+        
+        .chat-container {
+            height: 400px;
+            overflow-y: auto;
+            padding: 20px;
+            background: #f8f9fa;
+        }
+        
+        .message {
+            margin-bottom: 16px;
+            display: flex;
+            gap: 12px;
+        }
+        
+        .message.user {
+            flex-direction: row-reverse;
+        }
+        
+        .message-content {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            word-wrap: break-word;
+        }
+        
+        .message.user .message-content {
+            background: #007bff;
+            color: white;
+        }
+        
+        .message.assistant .message-content {
+            background: white;
+            border: 1px solid #e9ecef;
+        }
+        
+        .message-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        
+        .message.user .message-avatar {
+            background: #007bff;
+            color: white;
+        }
+        
+        .message.assistant .message-avatar {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .input-area {
+            padding: 20px;
+            border-top: 1px solid #e9ecef;
+        }
+        
+        .model-selector {
+            margin-bottom: 12px;
+        }
+        
+        .model-selector select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        
+        .input-group {
+            display: flex;
+            gap: 12px;
+        }
+        
+        .input-group input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid #ced4da;
+            border-radius: 24px;
+            font-size: 14px;
+            outline: none;
+        }
+        
+        .input-group input:focus {
+            border-color: #007bff;
+        }
+        
+        .send-btn {
+            padding: 12px 24px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 24px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .send-btn:hover {
+            background: #0056b3;
+        }
+        
+        .send-btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧠 CodeDeck Neural Interface</h1>
+            <p>Local LLM Inference Hub</p>
+        </div>
+        
+        <div class="status-bar">
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Connecting...</span>
+            </div>
+            <div id="modelInfo">Loading models...</div>
+        </div>
+        
+        <div class="chat-container" id="chatContainer">
+            <div class="message assistant">
+                <div class="message-avatar">🤖</div>
+                <div class="message-content">
+                    Hello! I'm your CodeDeck AI assistant. How can I help you today?
+                </div>
+            </div>
+        </div>
+        
+        <div class="loading" id="loading">
+            <div>🤔 Thinking...</div>
+        </div>
+        
+        <div class="input-area">
+            <div class="model-selector">
+                <select id="modelSelect">
+                    <option value="">Loading models...</option>
+                </select>
+            </div>
+            
+            <div class="input-group">
+                <input 
+                    type="text" 
+                    id="messageInput" 
+                    placeholder="Type your message here..."
+                    onkeypress="handleKeyPress(event)"
+                >
+                <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+                    Send
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentModel = '';
+        let isLoading = false;
+        
+        // Initialize the app
+        async function init() {
+            await checkStatus();
+            await loadModels();
+        }
+        
+        // Check server status
+        async function checkStatus() {
+            try {
+                const response = await fetch('/health');
+                const data = await response.json();
+                
+                const statusDot = document.getElementById('statusDot');
+                const statusText = document.getElementById('statusText');
+                
+                if (response.ok) {
+                    statusDot.style.background = '#27ae60';
+                    statusText.textContent = 'Online';
+                } else {
+                    statusDot.style.background = '#e74c3c';
+                    statusText.textContent = 'Error';
+                }
+            } catch (error) {
+                const statusDot = document.getElementById('statusDot');
+                const statusText = document.getElementById('statusText');
+                statusDot.style.background = '#e74c3c';
+                statusText.textContent = 'Offline';
+            }
+        }
+        
+        // Load available models
+        async function loadModels() {
+            try {
+                const response = await fetch('/v1/models');
+                const data = await response.json();
+                
+                const modelSelect = document.getElementById('modelSelect');
+                const modelInfo = document.getElementById('modelInfo');
+                
+                modelSelect.innerHTML = '';
+                
+                if (data.data && data.data.length > 0) {
+                    data.data.forEach(model => {
+                        const option = document.createElement('option');
+                        option.value = model.id;
+                        option.textContent = `${model.id} - ${model.description}`;
+                        if (model.loaded) {
+                            option.selected = true;
+                            currentModel = model.id;
+                        }
+                        modelSelect.appendChild(option);
+                    });
+                    
+                    if (!currentModel && data.data.length > 0) {
+                        currentModel = data.data[0].id;
+                        modelSelect.value = currentModel;
+                    }
+                    
+                    modelInfo.textContent = `${data.data.length} models available`;
+                } else {
+                    modelSelect.innerHTML = '<option value="">No models available</option>';
+                    modelInfo.textContent = 'No models';
+                }
+            } catch (error) {
+                console.error('Error loading models:', error);
+                document.getElementById('modelInfo').textContent = 'Error loading models';
+            }
+        }
+        
+        // Handle model selection change
+        document.getElementById('modelSelect').addEventListener('change', function(e) {
+            currentModel = e.target.value;
+        });
+        
+        // Handle enter key press
+        function handleKeyPress(event) {
+            if (event.key === 'Enter' && !isLoading) {
+                sendMessage();
+            }
+        }
+        
+        // Send message
+        async function sendMessage() {
+            const messageInput = document.getElementById('messageInput');
+            const message = messageInput.value.trim();
+            
+            if (!message || isLoading || !currentModel) return;
+            
+            // Add user message to chat
+            addMessage('user', message);
+            messageInput.value = '';
+            
+            // Show loading
+            setLoading(true);
+            
+            try {
+                const response = await fetch('/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        model: currentModel,
+                        messages: [
+                            { role: 'user', content: message }
+                        ],
+                        max_tokens: 512,
+                        temperature: 0.7
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.choices && data.choices.length > 0) {
+                    const assistantMessage = data.choices[0].message.content;
+                    addMessage('assistant', assistantMessage);
+                } else {
+                    addMessage('assistant', 'Sorry, I encountered an error processing your request.');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                addMessage('assistant', 'Sorry, I could not connect to the server.');
+            }
+            
+            setLoading(false);
+        }
+        
+        // Add message to chat
+        function addMessage(role, content) {
+            const chatContainer = document.getElementById('chatContainer');
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}`;
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.textContent = role === 'user' ? '👤' : '🤖';
+            
+            const messageContent = document.createElement('div');
+            messageContent.className = 'message-content';
+            messageContent.textContent = content;
+            
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(messageContent);
+            
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+        
+        // Set loading state
+        function setLoading(loading) {
+            isLoading = loading;
+            const sendBtn = document.getElementById('sendBtn');
+            const messageInput = document.getElementById('messageInput');
+            const loadingDiv = document.getElementById('loading');
+            
+            sendBtn.disabled = loading;
+            messageInput.disabled = loading;
+            loadingDiv.style.display = loading ? 'block' : 'none';
+        }
+        
+        // Initialize when page loads
+        init();
+        
+        // Refresh status every 30 seconds
+        setInterval(checkStatus, 30000);
+    </script>
+</body>
+</html> 
