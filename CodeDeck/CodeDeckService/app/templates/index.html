@@ -76,11 +76,22 @@
         .message {
             margin-bottom: 16px;
             display: flex;
-            gap: 12px;
+            flex-direction: column;
+            gap: 2px;
+            position: relative;
         }
         
         .message.user {
-            flex-direction: row-reverse;
+            align-items: flex-end;
+        }
+        
+        .message.assistant {
+            align-items: flex-start;
+        }
+        
+        .message-bubble {
+            display: flex;
+            gap: 12px;
         }
         
         .message-content {
@@ -121,6 +132,20 @@
             color: white;
         }
         
+        .message-sender {
+            font-size: 11px;
+            color: #6c757d;
+            margin: 0 12px;
+        }
+        
+        .message.user .message-sender {
+            text-align: right;
+        }
+        
+        .message.assistant .message-sender {
+            text-align: left;
+        }
+        
         .input-area {
             padding: 20px;
             border-top: 1px solid #e9ecef;
@@ -128,14 +153,47 @@
         
         .model-selector {
             margin-bottom: 12px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
         }
         
         .model-selector select {
-            width: 100%;
+            flex: 1;
+            min-width: 200px;
             padding: 8px 12px;
             border: 1px solid #ced4da;
             border-radius: 6px;
             font-size: 14px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .model-selector select option {
+            padding: 8px;
+        }
+        
+        .model-selector select option:checked {
+            background: linear-gradient(135deg, #4CAF50 0%, #2196F3 100%);
+            color: white;
+            font-weight: bold;
+        }
+        
+        .clear-btn {
+            padding: 6px 12px;
+            background: #f8f9fa;
+            color: #6c757d;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        
+        .clear-btn:hover {
+            background: #e9ecef;
+            color: #495057;
         }
         
         .input-group {
@@ -176,11 +234,580 @@
             cursor: not-allowed;
         }
         
+        .interrupt-btn {
+            display: none;
+            position: absolute;
+            right: 10px;
+            bottom: 10px;
+            padding: 6px 12px;
+            background: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            z-index: 10;
+            transition: all 0.2s ease;
+            opacity: 0.9;
+        }
+        
+        .interrupt-btn:hover {
+            background: #c0392b;
+            opacity: 1;
+        }
+        
+        /* Always show interrupt button during generation */
+        .message-content.generating .interrupt-btn {
+            display: block;
+        }
+        
         .loading {
             display: none;
             text-align: center;
             padding: 20px;
             color: #6c757d;
+        }
+        
+        .loading-model {
+            font-weight: bold;
+            color: #495057;
+        }
+        
+        .typing-indicator {
+            display: inline-block;
+            padding: 8px 12px;
+            background: #e9ecef;
+            border-radius: 18px;
+            margin: 4px 0;
+            font-size: 13px;
+        }
+        
+        .typing-indicator-text {
+            font-size: 12px;
+            color: #6c757d;
+            margin-right: 6px;
+            font-weight: 500;
+        }
+        
+        .typing-dots {
+            display: inline-flex;
+            gap: 2px;
+            vertical-align: middle;
+            margin-left: 4px;
+        }
+        
+        .typing-dot {
+            width: 6px;
+            height: 6px;
+            background: #6c757d;
+            border-radius: 50%;
+            animation: typing-bounce 1.4s infinite ease-in-out;
+            display: inline-block;
+        }
+        
+        .typing-dot:nth-child(1) {
+            animation-delay: 0s;
+        }
+        
+        .typing-dot:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+        
+        .typing-dot:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+        
+        @keyframes typing-bounce {
+            0%, 60%, 100% {
+                transform: translateY(0);
+                opacity: 0.4;
+            }
+            30% {
+                transform: translateY(-10px);
+                opacity: 1;
+            }
+        }
+        
+        .thinking-section {
+            margin: 8px 0;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            background: #f8f9fa;
+        }
+        
+        .thinking-header {
+            padding: 8px 12px;
+            background: #e9ecef;
+            cursor: pointer;
+            font-size: 12px;
+            color: #6c757d;
+            border-radius: 6px 6px 0 0;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .thinking-header:hover {
+            background: #dee2e6;
+        }
+        
+        .thinking-content {
+            padding: 12px;
+            display: none;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 12px;
+            color: #495057;
+            white-space: pre-wrap;
+            border-top: 1px solid #e9ecef;
+        }
+        
+        .thinking-content.expanded {
+            display: block;
+        }
+        
+        .thinking-toggle {
+            font-size: 10px;
+            transition: transform 0.2s;
+        }
+        
+        .thinking-toggle.expanded {
+            transform: rotate(90deg);
+        }
+        
+        /* Tag styling */
+        .tag-content {
+            font-style: italic;
+            padding: 2px 4px;
+            border-radius: 3px;
+            margin: 0 1px;
+        }
+        
+        .tag-content.think {
+            background-color: rgba(76, 0, 153, 0.1);
+            color: #4b0082; /* Indigo */
+            border-left: 2px solid #4b0082;
+        }
+        
+        .tag-content.reasoning {
+            background-color: rgba(0, 128, 128, 0.1);
+            color: #008080; /* Teal */
+            border-left: 2px solid #008080;
+        }
+        
+        .tag-content.plan {
+            background-color: rgba(0, 100, 0, 0.1);
+            color: #006400; /* Dark Green */
+            border-left: 2px solid #006400;
+        }
+        
+        .tag-content.observe {
+            background-color: rgba(255, 69, 0, 0.1);
+            color: #ff4500; /* Orange Red */
+            border-left: 2px solid #ff4500;
+        }
+        
+        .tag-content.critique {
+            background-color: rgba(178, 34, 34, 0.1);
+            color: #b22222; /* Firebrick */
+            border-left: 2px solid #b22222;
+        }
+        
+        .tag-content.custom {
+            background-color: rgba(70, 130, 180, 0.1);
+            color: #4682b4; /* Steel Blue */
+            border-left: 2px solid #4682b4;
+        }
+        
+        .tag-marker {
+            opacity: 0.7;
+            font-size: 11px;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-style: normal;
+            font-weight: bold;
+            padding: 1px 2px;
+            border-radius: 2px;
+            background-color: rgba(0, 0, 0, 0.05);
+        }
+        
+        .config-toggle {
+            margin-left: 10px;
+            cursor: pointer;
+            font-size: 12px;
+            color: #bbb;
+        }
+        
+        .config-panel {
+            display: none;
+            padding: 10px;
+            background: #f8f9fa;
+            border-top: 1px solid #e9ecef;
+        }
+        
+        .config-panel.visible {
+            display: block;
+        }
+        
+        .config-item {
+            margin-bottom: 12px;
+        }
+        
+        .config-item label {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 12px;
+            color: #495057;
+        }
+        
+        .config-item input, .config-item select {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        
+        .config-section {
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            margin-bottom: 12px;
+        }
+        
+        .config-section-title {
+            font-size: 13px;
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #495057;
+        }
+        
+        .config-item textarea {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 12px;
+            height: 80px;
+            resize: vertical;
+        }
+        
+        .config-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+        
+        .config-col {
+            flex: 1;
+        }
+        
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .slider-container input[type="range"] {
+            flex: 1;
+        }
+        
+        .slider-value {
+            width: 40px;
+            text-align: center;
+            font-size: 12px;
+            color: #495057;
+            background: #e9ecef;
+            padding: 3px 5px;
+            border-radius: 3px;
+        }
+        
+        .toggle-switch {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .toggle-switch input[type="checkbox"] {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .toggle-switch .toggle-label {
+            cursor: pointer;
+            padding: 6px 10px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 13px;
+            transition: all 0.2s ease;
+            background: #f8f9fa;
+            width: 100%;
+            text-align: center;
+            user-select: none;
+        }
+        
+        .toggle-switch input[type="checkbox"]:checked + .toggle-label {
+            background: #28a745;
+            color: white;
+            border-color: #28a745;
+            font-weight: bold;
+        }
+        
+        .toggle-switch input[type="checkbox"]:disabled + .toggle-label {
+            opacity: 0.7;
+            cursor: not-allowed;
+            background: #e9ecef;
+        }
+        
+        .message-attribution {
+            font-size: 10px;
+            color: #6c757d;
+            margin-top: 4px;
+            text-align: right;
+            font-style: italic;
+        }
+        
+        .model-change-notification {
+            text-align: center;
+            padding: 6px 12px;
+            margin: 8px auto;
+            background: #f8f9fa;
+            border-radius: 12px;
+            border: 1px dashed #ced4da;
+            font-size: 12px;
+            color: #6c757d;
+            max-width: 80%;
+        }
+        
+        .debug-panel {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            margin-top: 10px;
+            font-family: monospace;
+            font-size: 12px;
+            color: #495057;
+            max-height: 100px;
+            overflow-y: auto;
+        }
+        
+        .retry-btn {
+            padding: 6px 12px;
+            background: #17a2b8;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+        
+        .retry-btn:hover {
+            background: #138496;
+        }
+        
+        /* Persona Management Styles */
+        .persona-panel {
+            display: none;
+            padding: 15px;
+            background: #f8f9fa;
+            border-top: 1px solid #e9ecef;
+        }
+        
+        .persona-panel.visible {
+            display: block;
+        }
+        
+        .persona-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .persona-card {
+            padding: 10px;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .persona-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        
+        .persona-card.selected {
+            border-color: #007bff;
+            background: rgba(0, 123, 255, 0.05);
+        }
+        
+        .persona-icon {
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+        
+        .persona-name {
+            font-weight: bold;
+            margin-bottom: 4px;
+            font-size: 14px;
+        }
+        
+        .persona-description {
+            font-size: 12px;
+            color: #6c757d;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .persona-tags {
+            margin-top: 5px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+        
+        .persona-tag {
+            font-size: 10px;
+            padding: 2px 4px;
+            background: #e9ecef;
+            border-radius: 3px;
+            color: #495057;
+        }
+        
+        .persona-form {
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            padding: 15px;
+            background: white;
+        }
+        
+        .persona-btn {
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            border: none;
+            margin-right: 5px;
+        }
+        
+        .persona-btn.primary {
+            background: #007bff;
+            color: white;
+        }
+        
+        .persona-btn.secondary {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .persona-btn.danger {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .persona-btn.success {
+            background: #28a745;
+            color: white;
+        }
+        
+        /* Mode toggle styles */
+        .mode-toggle {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 8px;
+            padding: 4px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border: 1px solid #dee2e6;
+        }
+        
+        .mode-option {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .mode-option:hover {
+            background: #e9ecef;
+        }
+        
+        .mode-option input[type="radio"] {
+            margin: 0;
+        }
+        
+        .mode-option input[type="radio"]:checked + span {
+            color: #007bff;
+            font-weight: 600;
+        }
+        
+        /* Selection group styles */
+        .selection-group {
+            transition: all 0.3s ease;
+        }
+        
+        .selection-group.disabled {
+            opacity: 0.5;
+            pointer-events: none;
+            filter: grayscale(50%);
+        }
+        
+        .selection-group.disabled select {
+            background-color: #f8f9fa;
+            color: #6c757d;
+        }
+        
+        /* Audio control buttons */
+        .audio-controls {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #e9ecef;
+        }
+        
+        .audio-btn {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            color: #495057;
+            transition: all 0.2s ease;
+        }
+        
+        .audio-btn:hover {
+            background: #e9ecef;
+            border-color: #adb5bd;
+        }
+        
+        .audio-btn:active {
+            background: #dee2e6;
+        }
+        
+        .audio-btn.loading {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+        
+        .audio-btn.loading::after {
+            content: '⏳';
+            margin-left: 4px;
         }
     </style>
 </head>
@@ -196,7 +823,249 @@
                 <div class="status-dot" id="statusDot"></div>
                 <span id="statusText">Connecting...</span>
             </div>
+            <div id="systemMetrics" style="font-size: 11px; color: #bbb;">Loading...</div>
             <div id="modelInfo">Loading models...</div>
+            <div class="config-toggle" id="configToggleBtn">⚙️</div>
+        </div>
+        
+        <!-- Debug panel (hidden by default) -->
+        <div id="debugPanel" style="display: none;" class="debug-panel">
+            <div id="debugOutput">No connection errors</div>
+            <button class="retry-btn" onclick="retryConnection()">Retry Connection</button>
+        </div>
+        
+        <!-- Audio elements for sound effects -->
+        <audio id="sendSound" preload="auto">
+            <source src="/static/sounds/send.wav" type="audio/wav">
+        </audio>
+        <audio id="receiveSound" preload="auto">
+            <source src="/static/sounds/receive.wav" type="audio/wav">
+        </audio>
+        <audio id="switchSound" preload="auto">
+            <source src="/static/sounds/switch.wav" type="audio/wav">
+        </audio>
+        <audio id="confirmSound" preload="auto">
+            <source src="/static/sounds/confirm.wav" type="audio/wav">
+        </audio>
+        
+        <div class="config-panel" id="configPanel">
+            <div class="config-section">
+                <div class="config-section-title">Connection Settings</div>
+                <div class="config-item">
+                    <label for="directModeToggle">Direct Mode:</label>
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="directModeToggle">
+                        <label for="directModeToggle" class="toggle-label">Enable Direct Mode</label>
+                    </div>
+                    <div style="font-size: 11px; color: #6c757d; margin-top: 4px;">
+                        Direct mode reduces latency but may be less reliable with some models
+                    </div>
+                </div>
+            </div>
+            
+            <div class="config-section">
+                <div class="config-section-title">Generation Settings</div>
+                <div class="config-item">
+                    <label for="temperatureSlider">Temperature:</label>
+                    <div class="slider-container">
+                        <input type="range" id="temperatureSlider" min="0" max="1" step="0.05" value="0.7" oninput="updateTemperatureValue()">
+                        <div class="slider-value" id="temperatureValue">0.7</div>
+                    </div>
+                    <div style="font-size: 11px; color: #6c757d; margin-top: 2px;">
+                        Lower = more focused, Higher = more creative
+                    </div>
+                </div>
+                
+                <div class="config-row">
+                    <div class="config-col">
+                        <div class="config-item">
+                            <label for="maxTokensInput">Max Tokens:</label>
+                            <input type="number" id="maxTokensInput" min="64" max="4096" step="64" value="512" onchange="saveConfig()">
+                        </div>
+                    </div>
+                    <div class="config-col">
+                        <div class="config-item">
+                            <label for="topPInput">Top-P:</label>
+                            <input type="number" id="topPInput" min="0" max="1" step="0.05" value="0.9" onchange="saveConfig()">
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="config-item">
+                    <label for="voiceModeSelect">Voice Mode:</label>
+                    <select id="voiceModeSelect" onchange="saveConfig()">
+                        <option value="text">Text Only (Manual Controls)</option>
+                        <option value="audio_file">Auto-Play in Browser</option>
+                        <option value="speak">Auto-Speak on Device</option>
+                    </select>
+                    <div style="font-size: 11px; color: #6c757d; margin-top: 2px;">
+                        Controls automatic audio behavior (manual buttons always available)
+                    </div>
+                </div>
+                
+                <div class="config-item">
+                    <label for="systemMessage">Persona:</label>
+                    <textarea id="systemMessage" placeholder="Set a specific persona or role for the AI (e.g. 'You are a helpful coding assistant')" onchange="saveConfig()"></textarea>
+                    <div style="font-size: 11px; color: #6c757d; margin-top: 2px;">
+                        Provide instructions to guide the model's behavior
+                    </div>
+                </div>
+                
+                <div class="config-row">
+                    <div class="config-col">
+                        <div class="config-item">
+                            <label for="maxContextInput">Max Context Length:</label>
+                            <input type="number" id="maxContextInput" min="1" max="20" step="1" value="7" onchange="saveConfig()">
+                            <div style="font-size: 11px; color: #6c757d; margin-top: 2px;">
+                                Number of message pairs to remember
+                            </div>
+                        </div>
+                    </div>
+                    <div class="config-col">
+                        <div class="config-item">
+                            <label for="topPInput">Top-P:</label>
+                            <input type="number" id="topPInput" min="0" max="1" step="0.05" value="0.9" onchange="saveConfig()">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="config-section">
+                <div class="config-section-title">
+                    Persona Management
+                    <button class="persona-btn primary" id="managePersonasBtn" style="float: right; margin-top: -5px;">
+                        Manage Personas
+                    </button>
+                </div>
+                <div class="config-item">
+                    <label for="openaiApiKey">OpenAI API Key (Optional):</label>
+                    <input type="password" id="openaiApiKey" placeholder="For generating system messages">
+                    <div style="font-size: 11px; color: #6c757d; margin-top: 2px;">
+                        Used only for generating system messages from descriptions
+                    </div>
+                </div>
+                <div class="config-item" style="text-align: right; margin-top: 10px;">
+                    <button class="persona-btn success" id="saveApiKeyBtn">Save API Key</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Persona Management Panel -->
+        <div class="persona-panel" id="personaPanel">
+            <div class="config-section-title">
+                Persona Management
+                <button class="persona-btn primary" id="newPersonaBtn" style="float: right; margin-top: -5px;">
+                    Create New Persona
+                </button>
+            </div>
+            
+            <div class="persona-list" id="personaList">
+                <!-- Personas will be loaded here -->
+                <div style="grid-column: 1 / -1; text-align: center; padding: 20px; color: #6c757d;">
+                    Loading personas...
+                </div>
+            </div>
+            
+            <div class="persona-form" id="personaForm" style="display: none;">
+                <div class="config-section-title">
+                    <span id="personaFormTitle">Create New Persona</span>
+                </div>
+                
+                <div class="config-item">
+                    <label for="personaName">Name:</label>
+                    <input type="text" id="personaName" placeholder="Name your persona">
+                </div>
+                
+                <div class="config-item">
+                    <label for="personaDescription">Description:</label>
+                    <input type="text" id="personaDescription" placeholder="Brief description">
+                </div>
+                
+                <div class="config-row">
+                    <div class="config-col">
+                        <div class="config-item">
+                            <label for="personaModel">Preferred Model:</label>
+                            <select id="personaModel">
+                                <option value="">Use Default</option>
+                                <!-- Models will be populated here -->
+                            </select>
+                        </div>
+                    </div>
+                    <div class="config-col">
+                        <div class="config-item">
+                            <label for="personaIcon">Icon:</label>
+                            <select id="personaIcon">
+                                <option value="🤖">🤖 Robot</option>
+                                <option value="👨‍💻">👨‍💻 Coder</option>
+                                <option value="🧠">🧠 Brain</option>
+                                <option value="🔍">🔍 Search</option>
+                                <option value="📝">📝 Writing</option>
+                                <option value="🎨">🎨 Creative</option>
+                                <option value="📊">📊 Data</option>
+                                <option value="🔬">🔬 Science</option>
+                                <option value="🧪">🧪 Chemistry</option>
+                                <option value="🧮">🧮 Math</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="config-row">
+                    <div class="config-col">
+                        <div class="config-item">
+                            <label for="personaVoice">Voice:</label>
+                            <select id="personaVoice">
+                                <option value="glados" selected>🤖 GlaDOS (Female AI)</option>
+                                <option value="jarvis">🎩 Jarvis (British Male)</option>
+                            </select>
+                            <div style="font-size: 11px; color: #6c757d; margin-top: 2px;">
+                                Voice used for text-to-speech responses
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="config-item">
+                    <label for="personaSystemMessage">System Message:</label>
+                    <textarea id="personaSystemMessage" placeholder="Define the AI's behavior and knowledge (e.g. 'You are a helpful coding assistant...')" rows="4"></textarea>
+                </div>
+                
+                <div class="config-item">
+                    <div class="config-row">
+                        <div class="config-col">
+                            <label for="personaTemperature">Temperature:</label>
+                            <input type="number" id="personaTemperature" min="0" max="1" step="0.05" value="0.7">
+                        </div>
+                        <div class="config-col">
+                            <label for="personaMaxTokens">Max Tokens:</label>
+                            <input type="number" id="personaMaxTokens" min="64" max="4096" step="64" value="512">
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="config-item">
+                    <label for="personaTags">Tags (comma separated):</label>
+                    <input type="text" id="personaTags" placeholder="e.g. creative, writing, stories">
+                </div>
+                
+                <div class="config-section-title" style="margin-top: 15px; font-size: 12px;">
+                    Generate System Message
+                </div>
+                
+                <div class="config-item">
+                    <label for="personaDescription">Brief Description of Desired Persona:</label>
+                    <input type="text" id="generatorInput" placeholder="e.g. A coding tutor who explains things simply">
+                </div>
+                
+                <div class="config-item" style="text-align: right;">
+                    <button class="persona-btn secondary" id="generateSystemBtn">Generate System Message</button>
+                </div>
+                
+                <div class="config-item" style="text-align: right; margin-top: 15px; border-top: 1px solid #e9ecef; padding-top: 15px;">
+                    <button class="persona-btn secondary" id="cancelPersonaBtn">Cancel</button>
+                    <button class="persona-btn primary" id="savePersonaBtn">Save Persona</button>
+                </div>
+            </div>
         </div>
         
         <div class="chat-container" id="chatContainer">
@@ -209,14 +1078,40 @@
         </div>
         
         <div class="loading" id="loading">
-            <div>🤔 Thinking...</div>
+            <div>🤔 <span class="loading-model" id="loadingModel">AI</span> is thinking...</div>
         </div>
         
         <div class="input-area">
             <div class="model-selector">
-                <select id="modelSelect">
-                    <option value="">Loading models...</option>
-                </select>
+                <!-- Mode Toggle -->
+                <div class="mode-toggle">
+                    <label class="mode-option">
+                        <input type="radio" name="selectionMode" value="manual" id="manualModeRadio" checked>
+                        <span>Manual</span>
+                    </label>
+                    <label class="mode-option">
+                        <input type="radio" name="selectionMode" value="persona" id="personaModeRadio">
+                        <span>Persona</span>
+                    </label>
+                </div>
+                
+                <!-- Manual Mode Controls -->
+                <div id="manualControls" class="selection-group">
+                    <select id="modelSelect">
+                        <option value="">Loading models...</option>
+                    </select>
+                </div>
+                
+                <!-- Persona Mode Controls -->
+                <div id="personaControls" class="selection-group disabled">
+                    <select id="personaSelect" style="max-width: 150px;">
+                        <option value="">No Persona</option>
+                    </select>
+                </div>
+                
+                <button id="clearBtn" class="clear-btn">
+                    Clear Context
+                </button>
             </div>
             
             <div class="input-group">
@@ -224,9 +1119,8 @@
                     type="text" 
                     id="messageInput" 
                     placeholder="Type your message here..."
-                    onkeypress="handleKeyPress(event)"
                 >
-                <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+                <button class="send-btn" id="sendBtn">
                     Send
                 </button>
             </div>
@@ -234,156 +1128,1044 @@
     </div>
 
     <script>
+        // Global variables
         let currentModel = '';
         let isLoading = false;
+        let conversationHistory = [];
+        let isLocalConnection = false;
+        let directInference = null;
+        let useDirectMode = false; // Direct mode toggle
+        let currentSelectionMode = 'manual'; // 'manual' or 'persona'
+        
+        // Generation settings
+        let temperature = 0.7;
+        let maxTokens = 512;
+        let topP = 0.9;
+        let systemMessage = '';
+        let maxContextLength = 7; // Default max context length
+        let voiceMode = 'speak'; // Default voice mode: text, audio_file, or speak
+        
+        // Declare variables for stream control
+        let currentController = null;
+        let isGenerating = false;
+        
+        // Tag colors map for consistency
+        const tagColorMap = {
+            'think': '#4b0082', // Indigo
+            'reasoning': '#008080', // Teal
+            'plan': '#006400', // Dark Green
+            'observe': '#ff4500', // Orange Red
+            'critique': '#b22222', // Firebrick
+            // Dynamic entries will be added for custom tags
+        };
+        
+        // Persona management variables
+        let personas = [];
+        let currentPersona = null;
+        let editingPersonaId = null;
+        
+        // Function to safely get DOM elements with error handling
+        function getElement(id) {
+            const element = document.getElementById(id);
+            if (!element) {
+                console.warn(`Element with id '${id}' not found`);
+            }
+            return element;
+        }
+        
+        // DOM-Ready event handler
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log("DOM content loaded, setting up event listeners");
+            
+            // Setup event listeners with null checks
+            const configToggleBtn = getElement('configToggleBtn');
+            if (configToggleBtn) {
+                configToggleBtn.addEventListener('click', toggleConfig);
+            }
+            
+            const modelSelect = getElement('modelSelect');
+            if (modelSelect) {
+                modelSelect.addEventListener('change', handleModelChange);
+            }
+            
+            const personaSelect = getElement('personaSelect');
+            if (personaSelect) {
+                personaSelect.addEventListener('change', handlePersonaChange);
+            }
+            
+            const sendBtn = getElement('sendBtn');
+            if (sendBtn) {
+                sendBtn.addEventListener('click', sendMessage);
+            }
+            
+            const clearBtn = getElement('clearBtn');
+            if (clearBtn) {
+                clearBtn.addEventListener('click', clearConversation);
+            }
+            
+            const messageInput = getElement('messageInput');
+            if (messageInput) {
+                messageInput.addEventListener('keypress', handleKeyPress);
+            }
+            
+            const tempSlider = getElement('temperatureSlider');
+            if (tempSlider) {
+                tempSlider.addEventListener('input', updateTemperatureValue);
+            }
+            
+            // Persona management event listeners
+            const managePersonasBtn = getElement('managePersonasBtn');
+            if (managePersonasBtn) {
+                managePersonasBtn.addEventListener('click', togglePersonaPanel);
+            }
+            
+            const newPersonaBtn = getElement('newPersonaBtn');
+            if (newPersonaBtn) {
+                newPersonaBtn.addEventListener('click', showNewPersonaForm);
+            }
+            
+            const savePersonaBtn = getElement('savePersonaBtn');
+            if (savePersonaBtn) {
+                savePersonaBtn.addEventListener('click', savePersona);
+            }
+            
+            const cancelPersonaBtn = getElement('cancelPersonaBtn');
+            if (cancelPersonaBtn) {
+                cancelPersonaBtn.addEventListener('click', hidePersonaForm);
+            }
+            
+            const saveApiKeyBtn = getElement('saveApiKeyBtn');
+            if (saveApiKeyBtn) {
+                saveApiKeyBtn.addEventListener('click', saveApiKey);
+            }
+            
+            const generateSystemBtn = getElement('generateSystemBtn');
+            if (generateSystemBtn) {
+                generateSystemBtn.addEventListener('click', generateSystemMessage);
+            }
+            
+            // Mode toggle event listeners
+            const manualModeRadio = getElement('manualModeRadio');
+            const personaModeRadio = getElement('personaModeRadio');
+            
+            if (manualModeRadio) {
+                manualModeRadio.addEventListener('change', handleModeToggle);
+            }
+            
+            if (personaModeRadio) {
+                personaModeRadio.addEventListener('change', handleModeToggle);
+            }
+            
+            // Initialize the app
+            init();
+        });
         
         // Initialize the app
         async function init() {
-            await checkStatus();
-            await loadModels();
-        }
-        
-        // Check server status
-        async function checkStatus() {
-            try {
-                const response = await fetch('/health');
-                const data = await response.json();
+            console.log("Initializing CodeDeck app...");
+            loadConfig();
+            
+            // Set initial status
+            updateStatusIndicators('initializing', 'Connecting...');
+            
+            // Check server health first
+            const isHealthy = await checkStatus();
+            
+            if (isHealthy) {
+                console.log("Server is healthy, loading components...");
+                await updateSystemMetrics();
+                await loadModels();
+                await loadPersonas();
                 
-                const statusDot = document.getElementById('statusDot');
-                const statusText = document.getElementById('statusText');
+                // Update model info display after loading
+                setTimeout(() => {
+                    updateModelInfo();
+                }, 500);
+            } else {
+                console.error("Server health check failed - will use fallback models");
+                updateStatusIndicators('error', 'Server unavailable');
                 
-                if (response.ok) {
-                    statusDot.style.background = '#27ae60';
-                    statusText.textContent = 'Online';
-                } else {
-                    statusDot.style.background = '#e74c3c';
-                    statusText.textContent = 'Error';
-                }
-            } catch (error) {
-                const statusDot = document.getElementById('statusDot');
-                const statusText = document.getElementById('statusText');
-                statusDot.style.background = '#e74c3c';
-                statusText.textContent = 'Offline';
-            }
-        }
-        
-        // Load available models
-        async function loadModels() {
-            try {
-                const response = await fetch('/v1/models');
-                const data = await response.json();
-                
+                // Fallback for unavailable server
                 const modelSelect = document.getElementById('modelSelect');
                 const modelInfo = document.getElementById('modelInfo');
                 
-                modelSelect.innerHTML = '';
+                if (modelSelect) {
+                    modelSelect.innerHTML = '<option value="emergency-fallback">Emergency Fallback</option>';
+                }
                 
-                if (data.data && data.data.length > 0) {
-                    data.data.forEach(model => {
-                        const option = document.createElement('option');
-                        option.value = model.id;
-                        option.textContent = `${model.id} - ${model.description}`;
-                        if (model.loaded) {
-                            option.selected = true;
-                            currentModel = model.id;
-                        }
-                        modelSelect.appendChild(option);
-                    });
+                if (modelInfo) {
+                    modelInfo.innerHTML = `<span style="color: #e74c3c">⚠️ Server unreachable - using fallback</span>`;
+                }
+                
+                currentModel = "emergency-fallback";
+            }
+            
+            setInterval(updateSystemMetrics, 30000); // Update metrics every 30 seconds
+            
+            // Initialize model selection
+            setTimeout(updateModelSelection, 1000);
+            
+            console.log("App initialization complete");
+        }
+        
+        // Load available personas
+        async function loadPersonas() {
+            try {
+                const response = await fetch('/v1/personas');
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    personas = data.data || [];
                     
-                    if (!currentModel && data.data.length > 0) {
-                        currentModel = data.data[0].id;
-                        modelSelect.value = currentModel;
-                    }
+                    console.log(`Loaded ${personas.length} personas`);
                     
-                    modelInfo.textContent = `${data.data.length} models available`;
+                    // Populate persona dropdown
+                    updatePersonaDropdown();
+                    
+                    // Update persona list in management panel
+                    updatePersonaList();
                 } else {
-                    modelSelect.innerHTML = '<option value="">No models available</option>';
-                    modelInfo.textContent = 'No models';
+                    console.warn("Error loading personas:", response.status);
                 }
             } catch (error) {
-                console.error('Error loading models:', error);
-                document.getElementById('modelInfo').textContent = 'Error loading models';
+                console.error('Error loading personas:', error);
             }
         }
         
-        // Handle model selection change
-        document.getElementById('modelSelect').addEventListener('change', function(e) {
-            currentModel = e.target.value;
-        });
+        // Update persona dropdown in the main UI
+        function updatePersonaDropdown() {
+            const personaSelect = getElement('personaSelect');
+            if (!personaSelect) return;
+            
+            // Clear current options except the default
+            personaSelect.innerHTML = '<option value="">No Persona</option>';
+            
+            // Add personas to dropdown
+            personas.forEach(persona => {
+                const option = document.createElement('option');
+                option.value = persona.id;
+                option.textContent = `${persona.icon} ${persona.name}`;
+                personaSelect.appendChild(option);
+            });
+        }
         
-        // Handle enter key press
-        function handleKeyPress(event) {
-            if (event.key === 'Enter' && !isLoading) {
-                sendMessage();
+        // Update the persona list in the management panel
+        function updatePersonaList() {
+            const personaList = getElement('personaList');
+            if (!personaList) return;
+            
+            // Clear current list
+            personaList.innerHTML = '';
+            
+            // Show message if no personas
+            if (personas.length === 0) {
+                personaList.innerHTML = `
+                    <div style="grid-column: 1 / -1; text-align: center; padding: 20px; color: #6c757d;">
+                        No personas found. Create one to get started.
+                    </div>
+                `;
+                return;
+            }
+            
+            // Add personas to list
+            personas.forEach(persona => {
+                const card = document.createElement('div');
+                card.className = 'persona-card';
+                card.dataset.id = persona.id;
+                
+                // If this is the currently selected persona, mark it
+                if (currentPersona && currentPersona.id === persona.id) {
+                    card.classList.add('selected');
+                }
+                
+                // Create tags HTML
+                const tagsHtml = persona.tags.map(tag => 
+                    `<div class="persona-tag">${tag}</div>`
+                ).join('');
+                
+                card.innerHTML = `
+                    <div class="persona-icon">${persona.icon}</div>
+                    <div class="persona-name">${persona.name}</div>
+                    <div class="persona-description">${persona.description}</div>
+                    <div class="persona-tags">${tagsHtml}</div>
+                `;
+                
+                // Add click handler
+                card.addEventListener('click', () => selectPersonaCard(persona.id));
+                
+                personaList.appendChild(card);
+            });
+        }
+        
+        // Select a persona card in the management panel
+        function selectPersonaCard(personaId) {
+            // Deselect all cards
+            const cards = document.querySelectorAll('.persona-card');
+            cards.forEach(card => card.classList.remove('selected'));
+            
+            // Select the clicked card
+            const selectedCard = document.querySelector(`.persona-card[data-id="${personaId}"]`);
+            if (selectedCard) {
+                selectedCard.classList.add('selected');
+            }
+            
+            // Find the persona
+            const persona = personas.find(p => p.id === personaId);
+            if (!persona) return;
+            
+            // Display persona details in the form
+            editingPersonaId = personaId;
+            
+            const personaFormTitle = getElement('personaFormTitle');
+            if (personaFormTitle) {
+                personaFormTitle.textContent = `Edit ${persona.name}`;
+            }
+            
+            // Fill form fields
+            const fields = {
+                'personaName': persona.name,
+                'personaDescription': persona.description,
+                'personaModel': persona.model,
+                'personaSystemMessage': persona.system_message,
+                'personaTemperature': persona.temperature,
+                'personaMaxTokens': persona.max_tokens,
+                'personaTags': persona.tags.join(', '),
+                'personaIcon': persona.icon,
+                'personaVoice': persona.voice
+            };
+            
+            for (const [id, value] of Object.entries(fields)) {
+                const element = getElement(id);
+                if (element) {
+                    element.value = value;
+                }
+            }
+            
+            // Show the form
+            const personaForm = getElement('personaForm');
+            if (personaForm) {
+                personaForm.style.display = 'block';
             }
         }
         
-        // Send message
+        // Toggle persona management panel
+        function togglePersonaPanel() {
+            const personaPanel = getElement('personaPanel');
+            const configPanel = getElement('configPanel');
+            
+            if (personaPanel) {
+                personaPanel.classList.toggle('visible');
+                
+                // If opening panel, load personas and populate model dropdown
+                if (personaPanel.classList.contains('visible')) {
+                    loadPersonas();
+                    
+                    // Populate the persona model dropdown with current models
+                    populatePersonaModelDropdown();
+                    
+                    // Hide config panel if it's open
+                    if (configPanel && configPanel.classList.contains('visible')) {
+                        configPanel.classList.remove('visible');
+                    }
+                }
+            }
+        }
+
+        // Populate persona model dropdown with available models
+        function populatePersonaModelDropdown() {
+            const personaModelSelect = getElement('personaModel');
+            if (!personaModelSelect) return;
+            
+            // Get the current models from the main model dropdown
+            const modelSelect = getElement('modelSelect');
+            if (!modelSelect) return;
+            
+            // Clear and rebuild the persona model dropdown
+            personaModelSelect.innerHTML = '<option value="">Use Default</option>';
+            
+            // Copy options from the main model dropdown
+            Array.from(modelSelect.options).forEach(option => {
+                if (option.value) { // Skip empty values
+                    const newOption = document.createElement('option');
+                    newOption.value = option.value;
+                    newOption.textContent = option.textContent;
+                    personaModelSelect.appendChild(newOption);
+                }
+            });
+        }
+        
+        // Show new persona form
+        function showNewPersonaForm() {
+            const personaForm = getElement('personaForm');
+            const personaFormTitle = getElement('personaFormTitle');
+            
+            if (personaForm) {
+                // Reset form
+                editingPersonaId = null;
+                
+                if (personaFormTitle) {
+                    personaFormTitle.textContent = 'Create New Persona';
+                }
+                
+                // Clear form fields
+                const fields = [
+                    'personaName', 'personaDescription', 'personaSystemMessage',
+                    'personaTags', 'generatorInput'
+                ];
+                
+                fields.forEach(id => {
+                    const element = getElement(id);
+                    if (element) {
+                        element.value = '';
+                    }
+                });
+                
+                // Set defaults for select and number fields
+                const personaModel = getElement('personaModel');
+                if (personaModel) {
+                    personaModel.value = '';
+                }
+                
+                const personaIcon = getElement('personaIcon');
+                if (personaIcon) {
+                    personaIcon.value = '🤖';
+                }
+                
+                const personaTemperature = getElement('personaTemperature');
+                if (personaTemperature) {
+                    personaTemperature.value = '0.7';
+                }
+                
+                const personaMaxTokens = getElement('personaMaxTokens');
+                if (personaMaxTokens) {
+                    personaMaxTokens.value = '512';
+                }
+                
+                // Show form
+                personaForm.style.display = 'block';
+            }
+        }
+        
+        // Hide persona form
+        function hidePersonaForm() {
+            const personaForm = getElement('personaForm');
+            if (personaForm) {
+                personaForm.style.display = 'none';
+            }
+        }
+        
+        // Save persona (create or update)
+        async function savePersona() {
+            try {
+                // Get form values
+                const name = getElement('personaName').value.trim();
+                const description = getElement('personaDescription').value.trim();
+                const model = getElement('personaModel').value;
+                const systemMessage = getElement('personaSystemMessage').value.trim();
+                const temperature = parseFloat(getElement('personaTemperature').value);
+                const maxTokens = parseInt(getElement('personaMaxTokens').value);
+                const tagsInput = getElement('personaTags').value.trim();
+                const icon = getElement('personaIcon').value;
+                const voice = getElement('personaVoice').value;
+                
+                // Validate required fields
+                if (!name || !systemMessage) {
+                    alert('Name and System Message are required.');
+                    return;
+                }
+                
+                // Parse tags
+                const tags = tagsInput
+                    ? tagsInput.split(',').map(tag => tag.trim()).filter(tag => tag)
+                    : ['custom'];
+                
+                // Create persona object
+                const persona = {
+                    name,
+                    description,
+                    model,
+                    system_message: systemMessage,
+                    temperature,
+                    max_tokens: maxTokens,
+                    tags,
+                    icon,
+                    voice
+                };
+                
+                let response;
+                
+                if (editingPersonaId) {
+                    // Update existing persona
+                    response = await fetch(`/v1/personas/${editingPersonaId}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(persona)
+                    });
+                } else {
+                    // Create new persona
+                    response = await fetch('/v1/personas', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(persona)
+                    });
+                }
+                
+                if (response.ok) {
+                    const savedPersona = await response.json();
+                    console.log('Persona saved:', savedPersona);
+                    
+                    // Reload personas
+                    await loadPersonas();
+                    
+                    // Hide form
+                    hidePersonaForm();
+                    
+                    // Show success message
+                    alert(editingPersonaId ? 'Persona updated successfully!' : 'Persona created successfully!');
+                } else {
+                    const errorData = await response.json();
+                    alert(`Error: ${errorData.detail || 'Failed to save persona'}`);
+                }
+            } catch (error) {
+                console.error('Error saving persona:', error);
+                alert('An error occurred while saving the persona.');
+            }
+        }
+        
+        // Delete a persona
+        async function deletePersona(personaId) {
+            if (!confirm('Are you sure you want to delete this persona?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/v1/personas/${personaId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    console.log(`Persona ${personaId} deleted`);
+                    
+                    // Reload personas
+                    await loadPersonas();
+                    
+                    // Hide form
+                    hidePersonaForm();
+                    
+                    // If the deleted persona was selected, reset to default
+                    if (currentPersona && currentPersona.id === personaId) {
+                        currentPersona = null;
+                        const personaSelect = getElement('personaSelect');
+                        if (personaSelect) {
+                            personaSelect.value = '';
+                        }
+                    }
+                    
+                    // Show success message
+                    alert('Persona deleted successfully!');
+                } else {
+                    const errorData = await response.json();
+                    alert(`Error: ${errorData.detail || 'Failed to delete persona'}`);
+                }
+            } catch (error) {
+                console.error('Error deleting persona:', error);
+                alert('An error occurred while deleting the persona.');
+            }
+        }
+        
+        // Save OpenAI API key
+        async function saveApiKey() {
+            try {
+                const apiKey = getElement('openaiApiKey').value.trim();
+                if (!apiKey) {
+                    alert('Please enter an API key.');
+                    return;
+                }
+                
+                const response = await fetch('/v1/personas/set_api_key', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ api_key: apiKey })
+                });
+                
+                if (response.ok) {
+                    alert('API key saved successfully!');
+                    
+                    // Clear the input field for security
+                    getElement('openaiApiKey').value = '';
+                } else {
+                    const errorData = await response.json();
+                    alert(`Error: ${errorData.detail || 'Failed to save API key'}`);
+                }
+            } catch (error) {
+                console.error('Error saving API key:', error);
+                alert('An error occurred while saving the API key.');
+            }
+        }
+        
+        // Generate system message from description
+        async function generateSystemMessage() {
+            try {
+                const description = getElement('generatorInput').value.trim();
+                if (!description) {
+                    alert('Please enter a description.');
+                    return;
+                }
+                
+                // Get API key if provided
+                const apiKey = getElement('openaiApiKey').value.trim();
+                
+                const response = await fetch('/v1/personas/generate_system_message', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        description,
+                        api_key: apiKey || undefined
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    // Set the generated system message
+                    const systemMessageField = getElement('personaSystemMessage');
+                    if (systemMessageField) {
+                        systemMessageField.value = data.system_message;
+                    }
+                    
+                    // Play confirmation sound
+                    playSound('confirmSound');
+                } else {
+                    const errorData = await response.json();
+                    alert(`Error: ${errorData.detail || 'Failed to generate system message'}`);
+                }
+            } catch (error) {
+                console.error('Error generating system message:', error);
+                alert('An error occurred while generating the system message. Make sure you have configured an OpenAI API key.');
+            }
+        }
+        
+        // Handle persona selection change
+        function handlePersonaChange(e) {
+            const personaId = e.target.value;
+            
+            // Only process persona changes when in persona mode
+            if (currentSelectionMode !== 'persona') {
+                return;
+            }
+            
+            if (!personaId) {
+                // Default selected
+                currentPersona = null;
+                return;
+            }
+            
+            // Find the selected persona
+            const persona = personas.find(p => p.id === personaId);
+            if (persona) {
+                currentPersona = persona;
+                console.log('Selected persona:', persona);
+                
+                // Update current model if persona specifies one
+                if (persona.model) {
+                    const modelSelect = getElement('modelSelect');
+                    if (modelSelect && modelSelect.value !== persona.model) {
+                        modelSelect.value = persona.model;
+                        currentModel = persona.model;
+                        updateModelSelection();
+                    }
+                }
+                
+                // Play switch sound
+                playSound('switchSound');
+                
+                // Update model info display
+                updateModelInfo();
+            }
+        }
+        
+        // Send message with persona support
         async function sendMessage() {
-            const messageInput = document.getElementById('messageInput');
+            const messageInput = getElement('messageInput');
+            if (!messageInput) return;
+            
             const message = messageInput.value.trim();
             
-            if (!message || isLoading || !currentModel) return;
+            if (!message || isLoading) return;
+            
+            // Check if we have a valid model based on current mode
+            if (currentSelectionMode === 'manual') {
+                if (!currentModel) {
+                    alert('Please select a model first');
+                    return;
+                }
+            } else if (currentSelectionMode === 'persona') {
+                if (!currentPersona) {
+                    alert('Please select a persona first');
+                    return;
+                }
+                // Use persona's model if available, otherwise use current model
+                if (currentPersona.model && currentPersona.model !== currentModel) {
+                    currentModel = currentPersona.model;
+                }
+            }
             
             // Add user message to chat
             addMessage('user', message);
             messageInput.value = '';
             
-            // Show loading
+            // Show loading with current model name
+            const loadingModel = getElement('loadingModel');
+            if (loadingModel) {
+                if (currentSelectionMode === 'persona' && currentPersona) {
+                    loadingModel.textContent = currentPersona.name;
+                } else {
+                    loadingModel.textContent = currentModel;
+                }
+            }
             setLoading(true);
             
-            try {
-                const response = await fetch('/v1/chat/completions', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        model: currentModel,
-                        messages: [
-                            { role: 'user', content: message }
-                        ],
-                        max_tokens: 512,
-                        temperature: 0.7
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (response.ok && data.choices && data.choices.length > 0) {
-                    const assistantMessage = data.choices[0].message.content;
-                    addMessage('assistant', assistantMessage);
-                } else {
-                    addMessage('assistant', 'Sorry, I encountered an error processing your request.');
-                }
-            } catch (error) {
-                console.error('Error:', error);
-                addMessage('assistant', 'Sorry, I could not connect to the server.');
-            }
-            
-            setLoading(false);
+            // Create assistant response placeholder with typing indicator
+            // This will automatically start the streaming request
+            addMessage('assistant', '');  // Empty content triggers typing indicator
         }
         
-        // Add message to chat
-        function addMessage(role, content) {
-            const chatContainer = document.getElementById('chatContainer');
+        // Toggle configuration panel
+        function toggleConfig() {
+            console.log("Toggle config called");
+            const panel = document.getElementById('configPanel');
+            if (panel) {
+                panel.classList.toggle('visible');
+            }
+        }
+        
+        // Load configuration from localStorage
+        function loadConfig() {
+            try {
+                const config = JSON.parse(localStorage.getItem('codeDeckConfig') || '{}');
+                
+                if (config.useDirectMode !== undefined) {
+                    useDirectMode = config.useDirectMode;
+                    const toggle = document.getElementById('directModeToggle');
+                    if (toggle) toggle.checked = useDirectMode;
+                }
+                
+                // Load selection mode
+                if (config.selectionMode !== undefined) {
+                    currentSelectionMode = config.selectionMode;
+                    const modeRadio = document.getElementById(currentSelectionMode + 'ModeRadio');
+                    if (modeRadio) {
+                        modeRadio.checked = true;
+                        // Trigger mode change to update UI
+                        handleModeToggle({ target: { value: currentSelectionMode } });
+                    }
+                }
+                
+                // Load generation settings
+                if (config.temperature !== undefined) {
+                    temperature = config.temperature;
+                    const tempSlider = document.getElementById('temperatureSlider');
+                    const tempValue = document.getElementById('temperatureValue');
+                    if (tempSlider) tempSlider.value = temperature;
+                    if (tempValue) tempValue.textContent = temperature;
+                }
+                if (config.maxTokens !== undefined) {
+                    maxTokens = config.maxTokens;
+                    const tokensInput = document.getElementById('maxTokensInput');
+                    if (tokensInput) tokensInput.value = maxTokens;
+                }
+                if (config.topP !== undefined) {
+                    topP = config.topP;
+                    const topPInput = document.getElementById('topPInput');
+                    if (topPInput) topPInput.value = topP;
+                }
+                if (config.systemMessage !== undefined) {
+                    systemMessage = config.systemMessage;
+                    const sysMsg = document.getElementById('systemMessage');
+                    if (sysMsg) sysMsg.value = systemMessage;
+                }
+                if (config.maxContextLength !== undefined) {
+                    maxContextLength = config.maxContextLength;
+                    const contextInput = document.getElementById('maxContextInput');
+                    if (contextInput) contextInput.value = maxContextLength;
+                }
+                if (config.voiceMode !== undefined) {
+                    voiceMode = config.voiceMode;
+                    const voiceModeSelect = document.getElementById('voiceModeSelect');
+                    if (voiceModeSelect) voiceModeSelect.value = voiceMode;
+                }
+                
+                // Initialize toggle UI based on loaded config
+                updateToggleUI();
+            } catch (e) {
+                console.warn('Failed to load config:', e);
+            }
+        }
+        
+        // Save configuration to localStorage
+        function saveConfig() {
+            try {
+                const toggle = document.getElementById('directModeToggle');
+                const tempSlider = document.getElementById('temperatureSlider');
+                const tokensInput = document.getElementById('maxTokensInput');
+                const topPInput = document.getElementById('topPInput');
+                const sysMsgInput = document.getElementById('systemMessage');
+                const contextInput = document.getElementById('maxContextInput');
+                const voiceModeSelect = document.getElementById('voiceModeSelect');
+                
+                if (toggle) useDirectMode = toggle.checked;
+                
+                // Save generation settings
+                if (tempSlider) temperature = parseFloat(tempSlider.value) || 0.7;
+                if (tokensInput) maxTokens = parseInt(tokensInput.value) || 512;
+                if (topPInput) topP = parseFloat(topPInput.value) || 0.9;
+                if (sysMsgInput) systemMessage = sysMsgInput.value || '';
+                if (contextInput) maxContextLength = parseInt(contextInput.value) || 7;
+                if (voiceModeSelect) voiceMode = voiceModeSelect.value || 'speak';
+                
+                localStorage.setItem('codeDeckConfig', JSON.stringify({
+                    useDirectMode,
+                    selectionMode: currentSelectionMode,
+                    temperature,
+                    maxTokens,
+                    topP,
+                    systemMessage,
+                    maxContextLength,
+                    voiceMode
+                }));
+                
+                console.log('Saved config:', { 
+                    useDirectMode,
+                    selectionMode: currentSelectionMode,
+                    temperature,
+                    maxTokens,
+                    topP,
+                    systemMessage,
+                    maxContextLength,
+                    voiceMode
+                });
+                updateModelInfo();
+                updateToggleUI();
+                
+                // Update context if needed
+                trimConversationHistory();
+                
+                // Play confirmation sound
+                playSound('confirmSound');
+            } catch (e) {
+                console.warn('Failed to save config:', e);
+            }
+        }
+        
+        // Update toggle UI states
+        function updateToggleUI() {
+            const toggleLabel = document.querySelector('.toggle-label');
+            if (toggleLabel) {
+                toggleLabel.textContent = useDirectMode ? 
+                    "Direct Mode Enabled" : 
+                    "Enable Direct Mode";
+            }
             
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${role}`;
+            // Force redraw of toggle
+            const toggle = getElement('directModeToggle');
+            if (toggle) {
+                toggle.checked = useDirectMode;
+                toggle.style.display = 'none';
+                setTimeout(() => {
+                    if (toggle) toggle.style.display = '';
+                }, 0);
+            }
+        }
+        
+        // Get a consistent color for a tag
+        function getTagColor(tagName) {
+            tagName = tagName.toLowerCase();
             
-            const avatar = document.createElement('div');
-            avatar.className = 'message-avatar';
-            avatar.textContent = role === 'user' ? '👤' : '🤖';
+            if (!tagColorMap[tagName]) {
+                // If we haven't seen this tag before, assign a color
+                const predefinedColors = [
+                    '#4682b4', // Steel Blue
+                    '#9932cc', // Dark Orchid
+                    '#2e8b57', // Sea Green
+                    '#8b4513', // Saddle Brown
+                    '#483d8b', // Dark Slate Blue
+                    '#cd5c5c', // Indian Red
+                    '#20b2aa', // Light Sea Green
+                    '#da70d6', // Orchid
+                    '#6495ed', // Cornflower Blue
+                    '#d2691e'  // Chocolate
+                ];
+                
+                // Use a deterministic assignment based on tag name
+                const hashCode = Array.from(tagName).reduce(
+                    (hash, char) => char.charCodeAt(0) + ((hash << 5) - hash), 0
+                );
+                const colorIndex = Math.abs(hashCode) % predefinedColors.length;
+                tagColorMap[tagName] = predefinedColors[colorIndex];
+            }
             
-            const messageContent = document.createElement('div');
-            messageContent.className = 'message-content';
-            messageContent.textContent = content;
+            return tagColorMap[tagName];
+        }
+        
+        // Parse content with any tags including <think>
+        function parseTaggedContent(content) {
+            if (!content) return [{ type: 'text', content: '' }];
             
-            messageDiv.appendChild(avatar);
-            messageDiv.appendChild(messageContent);
+            const parts = [];
+            let lastIndex = 0;
             
-            chatContainer.appendChild(messageDiv);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
+            // Generic tag regex - matches any tag pattern <tagname>content</tagname>
+            const tagRegex = /<(\w+)>([\s\S]*?)<\/\1>/g;
+            let match;
+            
+            while ((match = tagRegex.exec(content)) !== null) {
+                // Add content before the tag
+                if (match.index > lastIndex) {
+                    const beforeText = content.slice(lastIndex, match.index).trim();
+                    if (beforeText) {
+                        parts.push({ type: 'text', content: beforeText });
+                    }
+                }
+                
+                // Add the tagged content
+                const tagName = match[1].toLowerCase();
+                const tagContent = match[2].trim();
+                
+                parts.push({ 
+                    type: 'tag', 
+                    tagName: tagName,
+                    content: tagContent
+                });
+                
+                lastIndex = match.index + match[0].length;
+            }
+            
+            // Add remaining content after the last tag
+            if (lastIndex < content.length) {
+                const afterText = content.slice(lastIndex).trim();
+                if (afterText) {
+                    parts.push({ type: 'text', content: afterText });
+                }
+            }
+            
+            // If no tags found or parsing failed, return as simple text
+            if (parts.length === 0) {
+                parts.push({ type: 'text', content: content });
+            }
+            
+            return parts;
+        }
+        
+        // Format message content with any tags
+        function formatMessageContent(content) {
+            const parts = parseTaggedContent(content);
+            let formattedHtml = '';
+            
+            for (const part of parts) {
+                if (part.type === 'text') {
+                    formattedHtml += part.content;
+                } else if (part.type === 'tag') {
+                    formattedHtml += createTagSection(part.tagName, part.content);
+                }
+            }
+            
+            return formattedHtml;
+        }
+        
+        // Create tag section HTML
+        function createTagSection(tagName, content) {
+            const tagClass = ['think', 'reasoning', 'plan', 'observe', 'critique'].includes(tagName) 
+                ? tagName 
+                : 'custom';
+            
+            const tagColor = getTagColor(tagName);
+            
+            return `
+                <div class="tag-content ${tagClass}" style="--tag-color: ${tagColor};">
+                    <span class="tag-marker">&lt;${tagName}&gt;</span> 
+                    ${content} 
+                    <span class="tag-marker">&lt;/${tagName}&gt;</span>
+                </div>
+            `;
+        }
+        
+        // Create thinking section HTML - retained for backward compatibility
+        function createThinkingSection(content, index) {
+            const thinkingId = `thinking-${Date.now()}-${index}`;
+            return `
+                <div class="thinking-section">
+                    <div class="thinking-header" onclick="toggleThinking('${thinkingId}')">
+                        <span class="thinking-toggle">▶</span>
+                        <span>💭 Inner thoughts</span>
+                    </div>
+                    <div class="thinking-content" id="${thinkingId}">${content}</div>
+                </div>
+            `;
+        }
+        
+        // Toggle thinking section visibility
+        function toggleThinking(id) {
+            const thinkingContent = document.getElementById(id);
+            if (!thinkingContent) return;
+            
+            const header = thinkingContent.previousElementSibling;
+            if (!header) return;
+            
+            const toggle = header.querySelector('.thinking-toggle');
+            if (!toggle) return;
+            
+            thinkingContent.classList.toggle('expanded');
+            toggle.classList.toggle('expanded');
+        }
+        
+        // Helper function to add attribution and update conversation history
+        function addAttribution(messageContent, messageDiv, accumulatedContent) {
+            // Get raw text content for audio processing
+            const textContent = accumulatedContent;
+            
+            // Add audio controls (always visible)
+            const audioControls = createAudioControls(messageContent, textContent);
+            messageContent.appendChild(audioControls);
+            
+            // Add model attribution
+            const attribution = document.createElement('div');
+            attribution.className = 'message-attribution';
+            attribution.textContent = `Model: ${currentModel} (CodeDeck)`;
+            messageContent.appendChild(attribution);
+            
+            // Update sender label
+            if (messageDiv) {
+                const senderLabel = messageDiv.querySelector('.message-sender');
+                if (senderLabel) {
+                    senderLabel.textContent = (currentSelectionMode === 'persona' && currentPersona) 
+                        ? currentPersona.name 
+                        : currentModel;
+                }
+            }
+            
+            // Add to conversation history
+            conversationHistory.push({ 
+                role: 'assistant', 
+                content: accumulatedContent,
+                model: currentModel
+            });
+            
+            // Handle automatic audio based on voice mode
+            handleAutomaticAudio(textContent, messageContent);
+            
+            // Play receive sound
+            playSound('receiveSound');
+            
+            // Trim history if needed
+            trimConversationHistory();
         }
         
         // Set loading state
@@ -398,11 +2180,1342 @@
             loadingDiv.style.display = loading ? 'block' : 'none';
         }
         
-        // Initialize when page loads
-        init();
+        // Clear conversation history
+        function clearConversation() {
+            // Clear UI
+            const chatContainer = document.getElementById('chatContainer');
+            chatContainer.innerHTML = '';
+            
+            // Add initial welcome message
+            addMessage('assistant', 'Hello! I\'m your CodeDeck AI assistant. How can I help you today?');
+            
+            // Reset conversation history
+            conversationHistory = [];
+            
+            console.log('Conversation history cleared');
+        }
         
-        // Refresh status every 30 seconds
-        setInterval(checkStatus, 30000);
+        // Update temperature value display
+        function updateTemperatureValue() {
+            const slider = document.getElementById('temperatureSlider');
+            const valueDisplay = document.getElementById('temperatureValue');
+            
+            if (slider && valueDisplay) {
+                temperature = parseFloat(slider.value);
+                valueDisplay.textContent = temperature.toFixed(2);
+                saveConfig();
+            }
+        }
+        
+        // Play sound effect
+        function playSound(soundId) {
+            try {
+                const sound = document.getElementById(soundId);
+                if (sound) {
+                    sound.volume = 0.3; // Set volume to 30%
+                    sound.currentTime = 0;
+                    sound.play().catch(e => console.log('Sound play prevented by browser policy'));
+                }
+            } catch (e) {
+                console.log('Error playing sound:', e);
+            }
+        }
+        
+        // Process text-to-speech for AI responses
+        async function processTextToSpeech(text, messageContent) {
+            if (!text || text.trim() === '') {
+                console.log('TTS: No text provided, skipping');
+                return;
+            }
+            
+            // Determine voice based on current mode
+            let voiceToUse = 'en_US-GlaDOS-medium'; // Default voice
+            if (currentSelectionMode === 'persona' && currentPersona && currentPersona.voice) {
+                voiceToUse = currentPersona.voice;
+            }
+            
+            console.log(`TTS: Processing with replyType: ${replyType}, voice: ${voiceToUse}, mode: ${currentSelectionMode}`);
+            
+            try {
+                if (replyType === 'speak') {
+                    console.log('TTS: Sending speak request to server...');
+                    
+                    // Send text to server for TTS processing with piper and play through aplay
+                    const response = await fetch('/v1/tts/speak', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            text: text,
+                            voice: voiceToUse
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        console.log('TTS: Speak request successful:', data);
+                    } else {
+                        console.error('TTS: Speak request failed:', response.status, await response.text());
+                    }
+                } 
+                else if (replyType === 'audio_file') {
+                    console.log('TTS: Generating audio file...');
+                    
+                    // Generate audio file and add to message
+                    const response = await fetch('/v1/tts/generate', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            text: text,
+                            voice: voiceToUse
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        console.log('TTS: Audio file generated:', data);
+                        
+                        if (data.audio_path) {
+                            // Create audio player element and add to message
+                            const audioPlayer = document.createElement('audio');
+                            audioPlayer.controls = true;
+                            audioPlayer.autoplay = true;
+                            audioPlayer.style.marginTop = '10px';
+                            audioPlayer.style.width = '100%';
+                            
+                            const source = document.createElement('source');
+                            source.src = data.audio_path;
+                            source.type = 'audio/wav';
+                            
+                            audioPlayer.appendChild(source);
+                            messageContent.appendChild(audioPlayer);
+                            
+                            console.log('TTS: Audio player added to message');
+                        }
+                    } else {
+                        console.error('TTS: Audio generation failed:', response.status, await response.text());
+                    }
+                } else {
+                    console.log('TTS: Reply type is text only, skipping TTS');
+                }
+            } catch (error) {
+                console.error('Error processing text-to-speech:', error);
+            }
+        }
+        
+        // Interrupt generation
+        function interruptGeneration() {
+            console.log("Interrupt generation called");
+            
+            if (currentController) {
+                console.log('🛑 Interrupting generation');
+                try {
+                    currentController.abort();
+                } catch (e) {
+                    console.error("Error aborting controller:", e);
+                }
+                currentController = null;
+                
+                // Update UI to show interruption
+                const messageContainers = document.querySelectorAll('.message-content.generating');
+                messageContainers.forEach(messageContainer => {
+                    // Remove generating class
+                    messageContainer.classList.remove('generating');
+                    
+                    // Remove typing indicator
+                    const typingIndicator = messageContainer.querySelector('.typing-indicator');
+                    if (typingIndicator) {
+                        typingIndicator.remove();
+                    }
+                    
+                    // Add interruption notice
+                    messageContainer.textContent += "\n\n[Generation interrupted by user]";
+                    
+                    // Hide interrupt button
+                    const interruptBtn = messageContainer.querySelector('.interrupt-btn');
+                    if (interruptBtn) {
+                        interruptBtn.style.display = 'none';
+                    }
+                });
+                
+                // Reset loading state
+                setLoading(false);
+                isGenerating = false;
+                
+                // Focus back on input field
+                const messageInput = getElement('messageInput');
+                if (messageInput) {
+                    messageInput.focus();
+                }
+            }
+        }
+        
+        // Retry connection manually
+        async function retryConnection() {
+            // Clear current models
+            const modelSelect = getElement('modelSelect');
+            const modelInfo = getElement('modelInfo');
+            
+            if (modelSelect) {
+                modelSelect.innerHTML = '<option value="">Retrying...</option>';
+            }
+            
+            if (modelInfo) {
+                modelInfo.innerHTML = `<span style="color: #f39c12">⏳ Retrying connection...</span>`;
+            }
+            
+            // Try to load models again
+            await loadModels();
+        }
+        
+        // Get full message history with system message if present
+        function getFullMessageHistory() {
+            let messages = [...conversationHistory];
+            
+            // Only use persona system message if in persona mode
+            if (currentSelectionMode === 'persona' && currentPersona && currentPersona.system_message) {
+                // Check if there's already a system message
+                const hasSystem = messages.some(m => m.role === 'system');
+                if (hasSystem) {
+                    // Replace existing system message
+                    messages = messages.map(m => 
+                        m.role === 'system' 
+                            ? { role: 'system', content: currentPersona.system_message }
+                            : m
+                    );
+                } else {
+                    // Add system message at the beginning
+                    messages.unshift({ role: 'system', content: currentPersona.system_message });
+                }
+            } 
+            // In manual mode, use the manual system message if available
+            else if (currentSelectionMode === 'manual' && systemMessage.trim()) {
+                // Only add if not already present
+                const hasSystem = messages.some(m => m.role === 'system');
+                if (!hasSystem) {
+                    messages.unshift({ role: 'system', content: systemMessage.trim() });
+                }
+            }
+            
+            return messages;
+        }
+        
+        // Send request through CodeDeck API
+        async function sendCodeDeckRequest(messageContent, chatContainer, headers = {}) {
+            try {
+                isGenerating = true;
+                
+                // Mark message as generating
+                messageContent.classList.add('generating');
+                
+                // Show interrupt button
+                let btnElement = messageContent.querySelector('.interrupt-btn');
+                if (btnElement) {
+                    btnElement.style.display = 'block';
+                }
+                
+                // Create a request body with system message
+                const requestBody = JSON.stringify({
+                    model: currentModel,
+                    messages: getFullMessageHistory().map(h => ({ role: h.role, content: h.content })),
+                    max_tokens: maxTokens,
+                    temperature: temperature,
+                    stream: true,
+                    direct_mode: useDirectMode
+                });
+                
+                // Create AbortController for interruption
+                currentController = new AbortController();
+                const signal = currentController.signal;
+                
+                console.log(`Sending CodeDeck API request to /v1/chat/completions with mode: ${useDirectMode ? 'direct' : 'standard'}`);
+                
+                // Set default headers
+                const requestHeaders = {
+                    'Content-Type': 'application/json',
+                    'Accept': 'text/event-stream',
+                    'Cache-Control': 'no-cache',
+                    'X-Direct-Mode': useDirectMode ? 'true' : 'false',
+                    ...headers
+                };
+                
+                // Use fetch with manual chunked reading but force no buffering
+                const response = await fetch('/v1/chat/completions', {
+                    method: 'POST',
+                    headers: requestHeaders,
+                    body: requestBody,
+                    signal: signal
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const reader = response.body.getReader();
+                let accumulatedContent = '';
+                let decoder = new TextDecoder("utf-8");
+                
+                // Process the stream
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) {
+                        break;
+                    }
+                    
+                    // Decode the chunk
+                    const chunk = decoder.decode(value, { stream: true });
+                    
+                    // Process SSE format (data: {...}\n\n)
+                    const lines = chunk.split('\n\n');
+                    
+                    for (const line of lines) {
+                        if (!line.trim() || line.includes('padding')) continue;
+                        
+                        if (line.includes('data: [DONE]')) {
+                            // End of stream
+                            continue;
+                        }
+                        
+                        // Extract the data part
+                        const dataMatch = line.match(/data: (.+)$/m);
+                        if (!dataMatch) continue;
+                        
+                        try {
+                            const data = JSON.parse(dataMatch[1]);
+                            
+                            if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
+                                const token = data.choices[0].delta.content;
+                                accumulatedContent += token;
+                                
+                                // Update the message content
+                                const processedContent = cleanupThinkTags(accumulatedContent);
+                                
+                                if (processedContent.includes('<think>') || processedContent.includes('</think>')) {
+                                    messageContent.innerHTML = formatMessageContent(processedContent);
+                                } else {
+                                    messageContent.textContent = processedContent;
+                                }
+                                
+                                // Scroll to bottom
+                                chatContainer.scrollTop = chatContainer.scrollHeight;
+                            }
+                        } catch (e) {
+                            console.warn('Error parsing SSE data:', e);
+                        }
+                    }
+                }
+                
+                // Complete the message
+                const processedContent = cleanupThinkTags(accumulatedContent);
+                if (processedContent.includes('<think>') || processedContent.includes('</think>')) {
+                    messageContent.innerHTML = formatMessageContent(processedContent);
+                } else {
+                    messageContent.textContent = processedContent;
+                }
+                
+                const messageDiv = messageContent.closest('.message');
+                addAttribution(messageContent, messageDiv, accumulatedContent);
+                
+                if (!accumulatedContent.trim()) {
+                    messageContent.textContent = 'Sorry, I encountered an error processing your request.';
+                }
+                
+                // Reset generation state
+                isGenerating = false;
+                currentController = null;
+                
+                // Hide interrupt button
+                if (messageContent.querySelector('.interrupt-btn')) {
+                    messageContent.querySelector('.interrupt-btn').style.display = 'none';
+                }
+                
+                // Focus back on input field
+                const messageInput = getElement('messageInput');
+                if (messageInput) {
+                    messageInput.focus();
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                
+                // Don't show error message if it was intentionally aborted
+                if (error.name !== 'AbortError') {
+                    messageContent.textContent = 'Sorry, I encountered an error processing your request.';
+                }
+                
+                // Reset generation state
+                isGenerating = false;
+                currentController = null;
+                
+                // Hide interrupt button
+                if (messageContent.querySelector('.interrupt-btn')) {
+                    messageContent.querySelector('.interrupt-btn').style.display = 'none';
+                }
+                
+                // Focus back on input field
+                const messageInput = getElement('messageInput');
+                if (messageInput) {
+                    messageInput.focus();
+                }
+            }
+        }
+        
+        // Update model info to show direct mode and current model
+        function updateModelInfo() {
+            const modelInfo = document.getElementById('modelInfo');
+            if (!modelInfo) return;
+            
+            // Don't overwrite server error messages
+            if (modelInfo.innerHTML.includes('⚠️')) return;
+            
+            try {
+                // Direct mode indicator 
+                const directText = useDirectMode
+                    ? `<span style="color: #27ae60">⚡ Direct</span> | `
+                    : '';
+                
+                // Mode indicator and model display
+                let modeText = '';
+                let modelText = '';
+                
+                if (currentSelectionMode === 'manual') {
+                    modeText = `<span style="color: #007bff">📋 Manual</span> | `;
+                    modelText = currentModel ? currentModel : 'No model selected';
+                } else if (currentSelectionMode === 'persona') {
+                    modeText = `<span style="color: #6f42c1">🎭 Persona</span> | `;
+                    if (currentPersona) {
+                        modelText = `${currentPersona.name} (${currentPersona.model || 'default'})`;
+                    } else {
+                        modelText = 'No persona selected';
+                    }
+                }
+                
+                // Update the model info display
+                modelInfo.innerHTML = `${directText}${modeText}${modelText}`;
+                
+            } catch (error) {
+                console.error("Error updating model info:", error);
+                // Fallback to simple text display
+                const modelText = currentModel ? currentModel : 'No model selected';
+                modelInfo.textContent = modelText;
+            }
+        }
+        
+        // Trim conversation history to maxContextLength
+        function trimConversationHistory() {
+            if (conversationHistory.length > maxContextLength * 2) {
+                console.log(`Trimming conversation history to ${maxContextLength} interactions`);
+                
+                // Keep system message if present
+                let systemMsg = null;
+                if (conversationHistory.length > 0 && conversationHistory[0].role === 'system') {
+                    systemMsg = conversationHistory.shift(); // Remove and store system message
+                }
+                
+                // Calculate how many messages to keep (pairs of user & assistant messages)
+                const keepCount = maxContextLength * 2; // Each interaction is a user + assistant message
+                
+                // Trim history to most recent conversations
+                conversationHistory = conversationHistory.slice(-keepCount);
+                
+                // Re-add system message if it existed
+                if (systemMsg) {
+                    conversationHistory.unshift(systemMsg);
+                }
+                
+                console.log(`Conversation history trimmed to ${conversationHistory.length} messages`);
+            }
+        }
+        
+        // Add message to chat
+        async function addMessage(role, content, modelName = '') {
+            const chatContainer = document.getElementById('chatContainer');
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}`;
+            
+            // Create the message bubble with avatar and content
+            const messageBubble = document.createElement('div');
+            messageBubble.className = 'message-bubble';
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.textContent = role === 'user' ? '👤' : 
+                (currentSelectionMode === 'persona' && currentPersona) ? currentPersona.icon : '🤖';
+            
+            const messageContent = document.createElement('div');
+            messageContent.className = 'message-content';
+            
+            // Handle different message types
+            if (role === 'user') {
+                // For user messages, just add the content
+                messageContent.textContent = content;
+            } else {
+                // For assistant messages, check if content is provided or if we need typing indicator
+                if (content && content.trim() !== '') {
+                    // Clean up and handle potentially broken think tags
+                    let processedContent = cleanupThinkTags(content);
+                    
+                    // Format content with thinking sections if needed
+                    if (processedContent.includes('<think>') || processedContent.includes('</think>')) {
+                        messageContent.innerHTML = formatMessageContent(processedContent);
+                    } else {
+                        messageContent.textContent = processedContent;
+                    }
+                    
+                    // Add audio controls for assistant messages (always visible)
+                    const audioControls = createAudioControls(messageContent, content);
+                    messageContent.appendChild(audioControls);
+                    
+                    // Add model attribution if provided
+                    if (modelName) {
+                        const attribution = document.createElement('div');
+                        attribution.className = 'message-attribution';
+                        attribution.textContent = `Model: ${modelName}`;
+                        messageContent.appendChild(attribution);
+                    }
+                } else {
+                    // No content provided - create typing indicator for streaming response
+                    // Determine who is typing based on selection mode
+                    let typingName = currentModel;
+                    if (currentSelectionMode === 'persona' && currentPersona) {
+                        typingName = currentPersona.name;
+                    }
+                    
+                    messageContent.innerHTML = `
+                        <div class="typing-indicator">
+                            <span class="typing-indicator-text">${typingName} is typing</span>
+                            <div class="typing-dots">
+                                <div class="typing-dot"></div>
+                                <div class="typing-dot"></div>
+                                <div class="typing-dot"></div>
+                            </div>
+                        </div>
+                        <button class="interrupt-btn" id="interruptBtn" onclick="interruptGeneration()">
+                            Stop Generation
+                        </button>
+                    `;
+                    
+                    // Set up interrupt button click handler
+                    const interruptBtn = messageContent.querySelector('.interrupt-btn');
+                    if (interruptBtn) {
+                        interruptBtn.onclick = null;
+                        interruptBtn.addEventListener('click', interruptGeneration);
+                    }
+                    
+                    // Mark as generating for streaming
+                    messageContent.classList.add('generating');
+                }
+            }
+            
+            // Add bubble components in the right order based on role
+            if (role === 'user') {
+                messageBubble.appendChild(messageContent);
+                messageBubble.appendChild(avatar);
+            } else {
+                messageBubble.appendChild(avatar);
+                messageBubble.appendChild(messageContent);
+            }
+            
+            messageDiv.appendChild(messageBubble);
+            
+            // Add sender label below the message
+            const senderLabel = document.createElement('div');
+            senderLabel.className = 'message-sender';
+            senderLabel.textContent = role === 'user' ? 'You' : 
+                (currentSelectionMode === 'persona' && currentPersona) ? currentPersona.name : 
+                (modelName || currentModel || 'AI');
+            messageDiv.appendChild(senderLabel);
+            
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            
+            // Add to conversation history with model info for assistant messages
+            if (role === 'assistant' && content && modelName) {
+                conversationHistory.push({ 
+                    role, 
+                    content,
+                    model: modelName 
+                });
+                
+                // Handle automatic audio based on voice mode
+                handleAutomaticAudio(content, messageContent);
+                
+                // Play receive sound
+                playSound('receiveSound');
+            } else if (content) {
+                conversationHistory.push({ role, content });
+                
+                if (role === 'user') {
+                    // Play send sound
+                    playSound('sendSound');
+                }
+            }
+            
+            // Trim history if it exceeds the max context length
+            trimConversationHistory();
+            
+            // If this is an assistant message without content (typing indicator), 
+            // start the streaming request
+            if (role === 'assistant' && (!content || content.trim() === '')) {
+                try {
+                    // Prepare headers with persona ID if selected and in persona mode
+                    const headers = {
+                        'Content-Type': 'application/json',
+                        'Accept': 'text/event-stream',
+                        'Cache-Control': 'no-cache'
+                    };
+                    
+                    if (currentSelectionMode === 'persona' && currentPersona) {
+                        headers['X-Persona-ID'] = currentPersona.id;
+                    }
+                    
+                    // CodeDeck API with persona support
+                    await sendCodeDeckRequest(messageContent, chatContainer, headers);
+                } catch (error) {
+                    console.error('Error:', error);
+                    messageContent.textContent = 'Sorry, I could not connect to the server.';
+                }
+                
+                setLoading(false);
+            }
+        }
+        
+        // Clean up and fix common think tag issues
+        function cleanupThinkTags(content) {
+            if (!content) return '';
+            
+            // Fix specific model patterns - some models output broken tags
+            
+            // Case 1: Some models repeat the same text after a think tag
+            // Pattern: <think>X</think> X - remove the duplication
+            const thinkMatches = content.match(/<think>([\s\S]*?)<\/think>\s*([\s\S]*)/);
+            if (thinkMatches && thinkMatches.length >= 3) {
+                const thinkContent = thinkMatches[1].trim();
+                const afterContent = thinkMatches[2].trim();
+                
+                // If they're nearly identical, remove the duplication
+                if (afterContent && thinkContent.includes(afterContent) || 
+                    afterContent.includes(thinkContent)) {
+                    console.log('Detected duplicated content after think tag');
+                    return `<think>${thinkContent}</think>`;
+                }
+            }
+            
+            // Case 2: Missing opening <tag> tag
+            const tagNames = ['think', 'reasoning', 'plan', 'observe', 'critique'];
+            for (const tag of tagNames) {
+                if (!content.includes(`<${tag}>`) && content.includes(`</${tag}>`)) {
+                    const parts = content.split(`</${tag}>`);
+                    if (parts.length >= 2) {
+                        return `<${tag}>${parts[0].trim()}</${tag}> ${parts[1].trim()}`;
+                    }
+                }
+            }
+            
+            // Case 3: Missing closing </tag> tag
+            for (const tag of tagNames) {
+                if (content.includes(`<${tag}>`) && !content.includes(`</${tag}>`)) {
+                    return `${content}</${tag}>`;
+                }
+            }
+            
+            return content;
+        }
+        
+        // Fill persona form with selected persona data
+        function fillPersonaForm(persona) {
+            const formFields = {
+                'personaName': persona.name,
+                'personaDescription': persona.description,
+                'personaModel': persona.model,
+                'personaSystemMessage': persona.system_message,
+                'personaTemperature': persona.temperature,
+                'personaMaxTokens': persona.max_tokens,
+                'personaTags': persona.tags.join(', '),
+                'personaIcon': persona.icon,
+                'personaVoice': persona.voice || 'en_US-GlaDOS-medium'
+            };
+            
+            for (const [id, value] of Object.entries(formFields)) {
+                const element = getElement(id);
+                if (element) {
+                    element.value = value;
+                }
+            }
+            
+            // Update form ID state
+            currentPersonaEditId = persona.id;
+            getElement('editPersonaTitle').textContent = 'Edit Persona';
+            getElement('savePersonaBtn').textContent = 'Update';
+            getElement('deletePersonaBtn').style.display = 'block';
+        }
+
+        // Handle model selection change
+        function handleModelChange(e) {
+            const newModel = e.target.value;
+            
+            // Only process model changes when in manual mode
+            if (currentSelectionMode !== 'manual') {
+                return;
+            }
+            
+            if (newModel && newModel !== currentModel) {
+                // Update current model
+                currentModel = newModel;
+                console.log(`Model changed to: ${currentModel}`);
+                
+                // Show model change notification in chat
+                const chatContainer = getElement('chatContainer');
+                if (chatContainer) {
+                    const notification = document.createElement('div');
+                    notification.className = 'model-change-notification';
+                    notification.textContent = `Switched to model: ${currentModel}`;
+                    chatContainer.appendChild(notification);
+                    chatContainer.scrollTop = chatContainer.scrollTop + 100;
+                }
+                
+                // Update model info display
+                updateModelInfo();
+                
+                // Optional: load the selected model on the server
+                fetch(`/v1/models/${newModel}/load`, {
+                    method: 'POST'
+                }).then(response => {
+                    return response.json();
+                }).then(data => {
+                    console.log('Model loaded response:', data);
+                    // Play switch sound
+                    playSound('switchSound');
+                }).catch(error => {
+                    console.error('Error loading model:', error);
+                });
+            }
+        }
+
+        // Restore direct mode toggle listener
+        const directModeToggle = getElement('directModeToggle');
+        if (directModeToggle) {
+            directModeToggle.addEventListener('change', toggleDirectMode);
+        }
+
+        // Restore toggleDirectMode function
+        // Toggle direct mode
+        function toggleDirectMode() {
+            console.log("Toggle direct mode called");
+            const toggle = getElement('directModeToggle');
+            if (toggle) {
+                useDirectMode = toggle.checked;
+                saveConfig();
+                updateToggleUI();
+            }
+        }
+
+        // Add the handleKeyPress function to handle keyboard events
+        function handleKeyPress(e) {
+            // Check if Enter key was pressed without holding Shift
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault(); // Prevent default form submission
+                sendMessage();
+            }
+        }
+
+        // Add the checkStatus function to check server health
+        async function checkStatus() {
+            try {
+                const response = await fetch('/v1/status');
+                if (!response.ok) {
+                    console.error('Service status check failed:', response.status);
+                    updateStatusIndicators('error', 'Connection failed');
+                    return false;
+                }
+                
+                const data = await response.json();
+                console.log('Service status:', data);
+                
+                // Check if model engine is ready
+                if (data.model_engine === 'ready' && data.status === 'ready') {
+                    // Update currentModel if available
+                    if (data.current_model) {
+                        currentModel = data.current_model;
+                        updateModelSelection();
+                    }
+                    
+                    // Update status indicators to show ready state
+                    updateStatusIndicators('ready', 'Connected');
+                    return true;
+                } else {
+                    // System is initializing
+                    updateStatusIndicators('initializing', 'Initializing...');
+                    return false;
+                }
+            } catch (error) {
+                console.error('Error checking service status:', error);
+                updateStatusIndicators('error', 'Connection error');
+                return false;
+            }
+        }
+
+        // Update status indicators (dot and text)
+        function updateStatusIndicators(status, text) {
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+            
+            if (statusText) {
+                statusText.textContent = text;
+            }
+            
+            if (statusDot) {
+                // Remove existing status classes
+                statusDot.classList.remove('ready', 'initializing', 'error');
+                
+                // Add appropriate status class and color
+                statusDot.classList.add(status);
+                
+                switch (status) {
+                    case 'ready':
+                        statusDot.style.backgroundColor = '#28a745'; // Green
+                        break;
+                    case 'initializing':
+                        statusDot.style.backgroundColor = '#ffc107'; // Yellow
+                        break;
+                    case 'error':
+                        statusDot.style.backgroundColor = '#dc3545'; // Red
+                        break;
+                }
+            }
+        }
+
+        // Update model selection dropdown with current model
+        function updateModelSelection() {
+            try {
+                const modelSelect = getElement('modelSelect');
+                if (modelSelect && currentModel) {
+                    // Set the selected option to match current model
+                    const options = Array.from(modelSelect.options);
+                    const matchingOption = options.find(option => option.value === currentModel);
+                    if (matchingOption) {
+                        modelSelect.value = currentModel;
+                        updateModelInfo();
+                    }
+                }
+            } catch (error) {
+                console.error('Error updating model selection:', error);
+            }
+        }
+
+        // Load available models from the server
+        async function loadModels() {
+            try {
+                const response = await fetch('/v1/models');
+                if (!response.ok) {
+                    console.error('Failed to load models:', response.status);
+                    return;
+                }
+                
+                const data = await response.json();
+                const models = data.data || [];
+                
+                console.log('Loaded models:', models);
+                
+                // Update model dropdown
+                const modelSelect = getElement('modelSelect');
+                if (modelSelect && models.length > 0) {
+                    modelSelect.innerHTML = '';
+                    
+                    models.forEach(model => {
+                        const option = document.createElement('option');
+                        option.value = model.id;
+                        option.textContent = model.name || model.id;
+                        option.title = model.description || '';
+                        if (model.loaded) {
+                            option.selected = true;
+                            currentModel = model.id;
+                        }
+                        modelSelect.appendChild(option);
+                    });
+                    
+                    // If no model was marked as loaded, select the first one
+                    if (!currentModel && models.length > 0) {
+                        currentModel = models[0].id;
+                        modelSelect.value = currentModel;
+                    }
+                    
+                    // Update model info display
+                    updateModelInfo();
+                    
+                    // Also populate persona model dropdown if persona panel is open
+                    const personaPanel = getElement('personaPanel');
+                    if (personaPanel && personaPanel.classList.contains('visible')) {
+                        populatePersonaModelDropdown();
+                    }
+                } else if (modelSelect) {
+                    modelSelect.innerHTML = '<option value="">No models available</option>';
+                }
+                
+                // Remove the old persona model population code since we now use populatePersonaModelDropdown()
+                
+            } catch (error) {
+                console.error('Error loading models:', error);
+                const modelSelect = getElement('modelSelect');
+                if (modelSelect) {
+                    modelSelect.innerHTML = '<option value="">Error loading models</option>';
+                }
+            }
+        }
+
+        // Update system metrics display
+        async function updateSystemMetrics() {
+            try {
+                const response = await fetch('/v1/system/metrics');
+                if (!response.ok) {
+                    console.warn('Failed to fetch system metrics:', response.status);
+                    return;
+                }
+                
+                const metrics = await response.json();
+                console.log('System metrics:', metrics);
+                
+                // Update the main systemMetrics div
+                const systemMetricsDiv = document.getElementById('systemMetrics');
+                if (systemMetricsDiv && metrics) {
+                    let metricsText = '';
+                    
+                    // CPU usage
+                    if (metrics.cpu && metrics.cpu.usage_percent !== undefined) {
+                        metricsText += `CPU: ${metrics.cpu.usage_percent.toFixed(1)}% `;
+                    }
+                    
+                    // Memory usage  
+                    if (metrics.memory && metrics.memory.percent !== undefined) {
+                        metricsText += `RAM: ${metrics.memory.percent.toFixed(1)}% `;
+                    }
+                    
+                    // Temperature
+                    if (metrics.temperature && metrics.temperature.cpu_celsius !== undefined) {
+                        metricsText += `Temp: ${metrics.temperature.cpu_celsius.toFixed(1)}°C`;
+                    }
+                    
+                    systemMetricsDiv.textContent = metricsText || 'Metrics unavailable';
+                }
+                
+                // Also update individual elements if they exist (optional)
+                const cpuUsage = document.getElementById('cpuUsage');
+                if (cpuUsage && metrics.cpu) {
+                    cpuUsage.textContent = `${metrics.cpu.usage_percent.toFixed(1)}%`;
+                }
+                
+                const memoryUsage = document.getElementById('memoryUsage');
+                if (memoryUsage && metrics.memory) {
+                    memoryUsage.textContent = `${metrics.memory.percent.toFixed(1)}%`;
+                }
+                
+                const cpuTemp = document.getElementById('cpuTemp');
+                if (cpuTemp && metrics.temperature && metrics.temperature.cpu_celsius) {
+                    cpuTemp.textContent = `${metrics.temperature.cpu_celsius.toFixed(1)}°C`;
+                }
+                
+            } catch (error) {
+                console.error('Error updating system metrics:', error);
+                const systemMetricsDiv = document.getElementById('systemMetrics');
+                if (systemMetricsDiv) {
+                    systemMetricsDiv.textContent = 'Metrics error';
+                }
+            }
+        }
+
+        // Handle mode toggle between manual and persona
+        function handleModeToggle(e) {
+            currentSelectionMode = e.target.value;
+            console.log(`Selection mode changed to: ${currentSelectionMode}`);
+            
+            const manualControls = getElement('manualControls');
+            const personaControls = getElement('personaControls');
+            
+            if (currentSelectionMode === 'manual') {
+                // Enable manual controls, disable persona
+                if (manualControls) {
+                    manualControls.classList.remove('disabled');
+                }
+                if (personaControls) {
+                    personaControls.classList.add('disabled');
+                }
+                
+                // Clear current persona selection
+                const personaSelect = getElement('personaSelect');
+                if (personaSelect) {
+                    personaSelect.value = '';
+                }
+                currentPersona = null;
+                
+            } else if (currentSelectionMode === 'persona') {
+                // Enable persona controls, disable manual
+                if (manualControls) {
+                    manualControls.classList.add('disabled');
+                }
+                if (personaControls) {
+                    personaControls.classList.remove('disabled');
+                }
+            }
+            
+            // Play switch sound
+            playSound('switchSound');
+            
+            // Update model info display
+            updateModelInfo();
+        }
+
+        // Audio Control Functions
+        
+        // Create audio controls for a message
+        function createAudioControls(messageContent, textContent) {
+            const audioControls = document.createElement('div');
+            audioControls.className = 'audio-controls';
+            
+            // Play button (browser audio)
+            const playBtn = document.createElement('button');
+            playBtn.className = 'audio-btn play-btn';
+            playBtn.innerHTML = '▶️ Play';
+            playBtn.onclick = () => playAudioInBrowser(textContent, playBtn);
+            
+            // Speak button (device speakers)
+            const speakBtn = document.createElement('button');
+            speakBtn.className = 'audio-btn speak-btn';
+            speakBtn.innerHTML = '🔈 Speak';
+            speakBtn.onclick = () => speakAudioOnDevice(textContent, speakBtn);
+            
+            audioControls.appendChild(playBtn);
+            audioControls.appendChild(speakBtn);
+            
+            return audioControls;
+        }
+        
+        // Generate text hash for caching
+        function generateTextHash(text) {
+            let hash = 0;
+            for (let i = 0; i < text.length; i++) {
+                const char = text.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash = hash & hash; // Convert to 32bit integer
+            }
+            return Math.abs(hash).toString(36);
+        }
+        
+        // Clean text for TTS processing
+        function cleanTextForTTS(text) {
+            // Remove thinking tags and their content (inner thoughts should not be spoken)
+            let cleaned = text
+                .replace(/<think>[\s\S]*?<\/think>/gi, ' ') // Remove <think> blocks
+                .replace(/<thought>[\s\S]*?<\/thought>/gi, ' ') // Remove <thought> blocks
+                .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, ' ') // Remove <reasoning> blocks
+                .replace(/<plan>[\s\S]*?<\/plan>/gi, ' ') // Remove <plan> blocks
+                .replace(/<observe>[\s\S]*?<\/observe>/gi, ' ') // Remove <observe> blocks
+                .replace(/<critique>[\s\S]*?<\/critique>/gi, ' ') // Remove <critique> blocks
+                .replace(/```[\s\S]*?```/g, ' ') // Remove code blocks
+                .replace(/<[^>]*>/g, ' ') // Remove remaining HTML/XML tags
+                .replace(/\*\*|\*|__|\|/g, ' ') // Remove markdown formatting
+                .replace(/\s+/g, ' ') // Normalize whitespace
+                .trim();
+            
+            return cleaned;
+        }
+        
+        // Global cooldown management
+        let ttsCooldownActive = false;
+        const TTS_COOLDOWN_DURATION = 2000; // 2 seconds cooldown
+        
+        // Apply cooldown to prevent rapid requests
+        function applyTTSCooldown() {
+            ttsCooldownActive = true;
+            
+            // Disable all TTS buttons during cooldown
+            const allTTSButtons = document.querySelectorAll('.audio-controls button');
+            allTTSButtons.forEach(btn => {
+                btn.disabled = true;
+                btn.style.opacity = '0.6';
+            });
+            
+            setTimeout(() => {
+                ttsCooldownActive = false;
+                // Re-enable all TTS buttons
+                allTTSButtons.forEach(btn => {
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                });
+            }, TTS_COOLDOWN_DURATION);
+        }
+        
+        // Show success feedback
+        function showTTSSuccess(button, message, duration = 3000) {
+            const originalContent = button.innerHTML;
+            button.innerHTML = `✅ ${message}`;
+            button.style.background = '#28a745';
+            button.style.color = 'white';
+            
+            setTimeout(() => {
+                button.innerHTML = originalContent;
+                button.style.background = '';
+                button.style.color = '';
+            }, duration);
+        }
+        
+        // Get voice for current context
+        function getCurrentVoice() {
+            if (currentSelectionMode === 'persona' && currentPersona && currentPersona.voice) {
+                return currentPersona.voice;
+            }
+            return 'glados'; // Default voice (simplified name)
+        }
+        
+        // Play audio in browser
+        async function playAudioInBrowser(text, button) {
+            // Check cooldown
+            if (ttsCooldownActive) {
+                console.log('TTS cooldown active, ignoring request');
+                return;
+            }
+            
+            const cleanText = cleanTextForTTS(text);
+            if (!cleanText) {
+                console.warn('No clean text available for TTS');
+                return;
+            }
+            
+            // Update button state
+            button.classList.add('loading');
+            button.innerHTML = '▶️ Play ⏳';
+            button.disabled = true;
+            
+            try {
+                const voice = getCurrentVoice();
+                const response = await fetch('/v1/tts/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        text: cleanText,
+                        voice: voice
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    if (data.audio_path) {
+                        // Create and play audio element
+                        const audio = new Audio(data.audio_path);
+                        
+                        // Show success feedback immediately
+                        showTTSSuccess(button, 'Generated!', 1500);
+                        
+                        audio.play();
+                        
+                        // Update button during playback
+                        button.innerHTML = '⏸️ Playing';
+                        
+                        audio.onended = () => {
+                            button.classList.remove('loading');
+                            button.innerHTML = '▶️ Play';
+                            button.disabled = false;
+                            
+                            // Apply cooldown after successful playback
+                            applyTTSCooldown();
+                        };
+                        
+                        audio.onerror = () => {
+                            button.classList.remove('loading');
+                            button.innerHTML = '▶️ Play';
+                            button.disabled = false;
+                            console.error('Audio playback failed');
+                        };
+                    } else {
+                        throw new Error('No audio path returned');
+                    }
+                } else {
+                    throw new Error(`TTS generation failed: ${await response.text()}`);
+                }
+            } catch (error) {
+                console.error('Error playing audio:', error);
+                
+                // Show error feedback
+                button.innerHTML = '❌ Error';
+                button.style.background = '#dc3545';
+                button.style.color = 'white';
+                
+                setTimeout(() => {
+                    button.classList.remove('loading');
+                    button.innerHTML = '▶️ Play';
+                    button.disabled = false;
+                    button.style.background = '';
+                    button.style.color = '';
+                }, 2000);
+            }
+        }
+        
+        // Speak audio on device
+        async function speakAudioOnDevice(text, button) {
+            // Check cooldown
+            if (ttsCooldownActive) {
+                console.log('TTS cooldown active, ignoring request');
+                return;
+            }
+            
+            const cleanText = cleanTextForTTS(text);
+            if (!cleanText) {
+                console.warn('No clean text available for TTS');
+                return;
+            }
+            
+            // Update button state
+            button.classList.add('loading');
+            button.innerHTML = '🔈 Speak ⏳';
+            button.disabled = true;
+            
+            try {
+                const voice = getCurrentVoice();
+                const response = await fetch('/v1/tts/speak', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        text: cleanText,
+                        voice: voice
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('TTS speak request successful:', data);
+                    
+                    // Show success feedback
+                    showTTSSuccess(button, 'Speaking!', 2000);
+                    
+                    // Provide visual feedback during speaking
+                    button.innerHTML = '🔊 Speaking';
+                    
+                    // Estimate speaking duration (approximately 150 words per minute)
+                    const wordCount = cleanText.split(/\s+/).length;
+                    const estimatedDuration = Math.max(3000, (wordCount / 150) * 60 * 1000); // Minimum 3 seconds
+                    
+                    setTimeout(() => {
+                        button.classList.remove('loading');
+                        button.innerHTML = '🔈 Speak';
+                        button.disabled = false;
+                        
+                        // Apply cooldown after successful speech
+                        applyTTSCooldown();
+                    }, estimatedDuration);
+                } else {
+                    throw new Error(`TTS speak request failed: ${await response.text()}`);
+                }
+            } catch (error) {
+                console.error('Error speaking audio:', error);
+                
+                // Show error feedback
+                button.innerHTML = '❌ Error';
+                button.style.background = '#dc3545';
+                button.style.color = 'white';
+                
+                setTimeout(() => {
+                    button.classList.remove('loading');
+                    button.innerHTML = '🔈 Speak';
+                    button.disabled = false;
+                    button.style.background = '';
+                    button.style.color = '';
+                }, 2000);
+            }
+        }
+        
+        // Handle automatic audio based on voice mode
+        async function handleAutomaticAudio(text, messageContent) {
+            if (voiceMode === 'text') {
+                // No automatic playback
+                return;
+            }
+            
+            // Check cooldown for automatic audio too
+            if (ttsCooldownActive) {
+                console.log('TTS cooldown active, skipping automatic audio');
+                return;
+            }
+            
+            const cleanText = cleanTextForTTS(text);
+            if (!cleanText) {
+                console.log('No clean text available for automatic audio');
+                return;
+            }
+            
+            console.log(`Auto-audio: mode=${voiceMode}, clean text length=${cleanText.length}`);
+            
+            if (voiceMode === 'audio_file') {
+                // Auto-play in browser
+                try {
+                    const voice = getCurrentVoice();
+                    const response = await fetch('/v1/tts/generate', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            text: cleanText,
+                            voice: voice
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.audio_path) {
+                            const audio = new Audio(data.audio_path);
+                            audio.autoplay = true;
+                            audio.play();
+                            
+                            // Apply cooldown after automatic playback starts
+                            audio.onplay = () => {
+                                applyTTSCooldown();
+                            };
+                            
+                            console.log('Auto-play successful');
+                        }
+                    } else {
+                        console.error('Auto-play generation failed:', await response.text());
+                    }
+                } catch (error) {
+                    console.error('Auto-play failed:', error);
+                }
+            } 
+            else if (voiceMode === 'speak') {
+                // Auto-speak on device
+                try {
+                    const voice = getCurrentVoice();
+                    const response = await fetch('/v1/tts/speak', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            text: cleanText,
+                            voice: voice
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        console.log('Auto-speak successful');
+                        
+                        // Apply cooldown after successful auto-speak
+                        applyTTSCooldown();
+                    } else {
+                        console.error('Auto-speak failed:', await response.text());
+                    }
+                } catch (error) {
+                    console.error('Auto-speak failed:', error);
+                }
+            }
+        }
     </script>
 </body>
 </html> 

@@ -200,25 +200,36 @@ class ModelEngine:
         temperature: float
     ):
         """Generate a streaming response"""
+        import time
+        
+        # Force individual token streaming with specific parameters
         stream = self.current_model(
             prompt,
             max_tokens=max_tokens,
             temperature=temperature,
             stop=["Human:", "System:"],
             echo=False,
-            stream=True
+            stream=True,
+            # Force immediate token generation
+            top_k=1,  # More predictable for testing
+            repeat_penalty=1.0,
         )
         
         for chunk in stream:
-            yield {
-                "choices": [{
-                    "delta": {
-                        "content": chunk['choices'][0]['text']
-                    },
-                    "finish_reason": None
-                }],
-                "model": self.current_model_name
-            }
+            # Force immediate yield of each token
+            token_text = chunk['choices'][0]['text']
+            if token_text:  # Only yield non-empty tokens
+                yield {
+                    "choices": [{
+                        "delta": {
+                            "content": token_text
+                        },
+                        "finish_reason": None
+                    }],
+                    "model": self.current_model_name
+                }
+                # Small delay to make streaming more visible during testing
+                time.sleep(0.01)  # 10ms delay per token
     
     async def get_available_models(self) -> List[Dict[str, Any]]:
         """Get list of available models"""
