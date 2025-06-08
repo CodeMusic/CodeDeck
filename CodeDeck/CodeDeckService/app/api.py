@@ -570,7 +570,7 @@ def create_api_router() -> APIRouter:
                 "jarvis": ("jarvis", "en_GB-jarvis-medium")
             }
             
-            voice_name, model_name = voice_map.get(voice.lower(), ("glados", "en_US-GlaDOS-medium"))
+            voice_name, model_name = voice_map.get(voice.lower(), (voice, voice))
             
             # Set paths matching the reference script
             home_dir = os.path.expanduser("~")
@@ -665,7 +665,7 @@ def create_api_router() -> APIRouter:
                 "jarvis": ("jarvis", "en_GB-jarvis-medium")
             }
             
-            voice_name, model_name = voice_map.get(voice.lower(), ("glados", "en_US-GlaDOS-medium"))
+            voice_name, model_name = voice_map.get(voice.lower(), (voice, voice))
             
             # Set paths matching the reference script
             home_dir = os.path.expanduser("~")
@@ -756,6 +756,55 @@ def create_api_router() -> APIRouter:
                 os.unlink(file_path)
             except:
                 pass
+    
+    @router.get("/v1/tts/voices")
+    async def list_available_voices():
+        """List available TTS voices"""
+        try:
+            # Check for available voice models
+            home_dir = os.path.expanduser("~")
+            model_dir = os.path.join(home_dir, "CodeDeck", "voice_models")
+            
+            available_voices = []
+            
+            if os.path.exists(model_dir):
+                # Scan directory for .onnx files
+                for filename in os.listdir(model_dir):
+                    # Skip hidden files, system files, and directory artifacts
+                    if filename.startswith('.') or filename.startswith('_'):
+                        continue
+                        
+                    if filename.endswith('.onnx'):
+                        # Remove .onnx extension to get voice name
+                        voice_name = filename[:-5]  # Remove .onnx
+                        
+                        # Skip if voice name still starts with dots/underscores after processing
+                        if voice_name.startswith('.') or voice_name.startswith('_'):
+                            continue
+                        
+                        # Check if corresponding .json config file exists
+                        config_file = os.path.join(model_dir, f"{voice_name}.onnx.json")
+                        if os.path.exists(config_file):
+                            available_voices.append(voice_name)
+            
+            # Sort voices for consistent ordering
+            available_voices.sort()
+            
+            # If no voices found, return defaults
+            if not available_voices:
+                available_voices = ["glados", "jarvis"]
+            
+            return {
+                "voices": available_voices,
+                "default": available_voices[0] if available_voices else "glados"
+            }
+        except Exception as e:
+            logger.error(f"Error listing voices: {e}")
+            # Return default voices as fallback
+            return {
+                "voices": ["glados", "jarvis"],
+                "default": "glados"
+            }
     
     return router
 

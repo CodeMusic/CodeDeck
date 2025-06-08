@@ -809,6 +809,241 @@
             content: '⏳';
             margin-left: 4px;
         }
+
+        .audio-controls .audio-btn.loading {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        /* Personality Editor Styles */
+        .personality-editor {
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            background: #f8f9fa;
+            margin-top: 10px;
+        }
+
+        .persona-image-section {
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .image-selector {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+        }
+
+        .current-image {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .emoji-display {
+            font-size: 48px;
+            border: 2px solid #dee2e6;
+            border-radius: 50%;
+            width: 64px;
+            height: 64px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: white;
+        }
+
+        .change-image-btn {
+            padding: 8px 16px;
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .change-image-btn:hover {
+            background: #5a6268;
+        }
+
+        .personality-sections {
+            display: grid;
+            gap: 20px;
+        }
+
+        .personality-section {
+            background: white;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            padding: 15px;
+        }
+
+        .personality-section label {
+            font-weight: 600;
+            color: #495057;
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        .personality-section textarea {
+            width: 100%;
+            min-height: 80px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            padding: 10px;
+            resize: vertical;
+            font-family: inherit;
+            font-size: 14px;
+        }
+
+        .ocean-sliders {
+            display: grid;
+            gap: 15px;
+        }
+
+        .ocean-trait {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .ocean-trait label {
+            min-width: 120px;
+            margin-bottom: 0;
+            font-size: 14px;
+        }
+
+        .ocean-trait input[type="range"] {
+            flex: 1;
+            height: 6px;
+            border-radius: 3px;
+            background: #dee2e6;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        .ocean-trait input[type="range"]::-webkit-slider-thumb {
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #007bff;
+            cursor: pointer;
+        }
+
+        .ocean-trait input[type="range"]::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #007bff;
+            cursor: pointer;
+            border: none;
+        }
+
+        .trait-value {
+            min-width: 40px;
+            text-align: right;
+            font-weight: 600;
+            color: #007bff;
+        }
+        
+        /* Persona Test Section Styles */
+        .persona-test-section {
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 15px;
+            background: white;
+            margin-top: 10px;
+        }
+
+        .test-chat-container {
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            padding: 10px;
+            background: #f8f9fa;
+            margin-bottom: 10px;
+        }
+
+        .test-message {
+            margin-bottom: 12px;
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+        }
+
+        .test-message.user {
+            flex-direction: row-reverse;
+        }
+
+        .test-avatar {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: #6c757d;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            flex-shrink: 0;
+        }
+
+        .test-message.user .test-avatar {
+            background: #007bff;
+        }
+
+        .test-content {
+            max-width: 80%;
+            padding: 8px 12px;
+            border-radius: 12px;
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        .test-message.assistant .test-content {
+            background: white;
+            border: 1px solid #dee2e6;
+        }
+
+        .test-message.user .test-content {
+            background: #007bff;
+            color: white;
+        }
+
+        .test-input-area {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .test-input-area input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 18px;
+            font-size: 13px;
+            outline: none;
+        }
+
+        .test-input-area input:focus {
+            border-color: #007bff;
+        }
+
+        .test-input-area .persona-btn {
+            margin: 0;
+            font-size: 12px;
+            padding: 8px 16px;
+        }
+
+        .test-message.typing .test-content {
+            background: #e9ecef;
+            font-style: italic;
+            color: #6c757d;
+        }
     </style>
 </head>
 <body>
@@ -825,6 +1060,7 @@
             </div>
             <div id="systemMetrics" style="font-size: 11px; color: #bbb;">Loading...</div>
             <div id="modelInfo">Loading models...</div>
+            <div class="config-toggle" id="thinkTagsToggle" title="Toggle speaking think tags">💭</div>
             <div class="config-toggle" id="configToggleBtn">⚙️</div>
         </div>
         
@@ -1014,10 +1250,14 @@
                     <div class="config-col">
                         <div class="config-item">
                             <label for="personaVoice">Voice:</label>
-                            <select id="personaVoice">
-                                <option value="glados" selected>🤖 GlaDOS (Female AI)</option>
-                                <option value="jarvis">🎩 Jarvis (British Male)</option>
-                            </select>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <select id="personaVoice" style="flex: 1;">
+                                    <option value="">Loading voices...</option>
+                                </select>
+                                <button type="button" class="persona-btn secondary" id="sampleVoiceBtn" style="margin: 0; font-size: 11px; padding: 6px 10px;">
+                                    🔊 Sample
+                                </button>
+                            </div>
                             <div style="font-size: 11px; color: #6c757d; margin-top: 2px;">
                                 Voice used for text-to-speech responses
                             </div>
@@ -1025,11 +1265,87 @@
                     </div>
                 </div>
                 
-                <div class="config-item">
-                    <label for="personaSystemMessage">System Message:</label>
-                    <textarea id="personaSystemMessage" placeholder="Define the AI's behavior and knowledge (e.g. 'You are a helpful coding assistant...')" rows="4"></textarea>
+                <div class="personality-editor">
+                    <!-- Image selection -->
+                    <div class="persona-image-section">
+                        <label>Avatar Image</label>
+                        <div class="image-selector">
+                            <div class="current-image" id="currentPersonaImage">
+                                <span class="emoji-display" id="personaEmojiDisplay">🤖</span>
+                                <input type="file" id="personaImageFile" accept="image/*" style="display: none;">
+                                <button type="button" class="change-image-btn" onclick="document.getElementById('personaImageFile').click()">Change</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Personality sections -->
+                    <div class="personality-sections">
+                        <div class="personality-section">
+                            <label for="personalityOcean">OCEAN Personality</label>
+                            <div class="ocean-sliders">
+                                <div class="ocean-trait">
+                                    <label>Openness</label>
+                                    <input type="range" id="openness" min="0" max="100" value="75">
+                                    <span class="trait-value">75%</span>
+                                </div>
+                                <div class="ocean-trait">
+                                    <label>Conscientiousness</label>
+                                    <input type="range" id="conscientiousness" min="0" max="100" value="85">
+                                    <span class="trait-value">85%</span>
+                                </div>
+                                <div class="ocean-trait">
+                                    <label>Extraversion</label>
+                                    <input type="range" id="extraversion" min="0" max="100" value="60">
+                                    <span class="trait-value">60%</span>
+                                </div>
+                                <div class="ocean-trait">
+                                    <label>Agreeableness</label>
+                                    <input type="range" id="agreeableness" min="0" max="100" value="70">
+                                    <span class="trait-value">70%</span>
+                                </div>
+                                <div class="ocean-trait">
+                                    <label>Neuroticism</label>
+                                    <input type="range" id="neuroticism" min="0" max="100" value="25">
+                                    <span class="trait-value">25%</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="personality-section">
+                            <label for="personaIdentity">Identity</label>
+                            <textarea id="personaIdentity" placeholder="Who are you? Your role, background, and fundamental identity. Be direct and clear about who you are."></textarea>
+                        </div>
+
+                        <div class="personality-section">
+                            <label for="personaCore">Core Philosophy</label>
+                            <textarea id="personaCore" placeholder="What is their fundamental belief or truth about existence, knowledge, relationships, or purpose?"></textarea>
+                        </div>
+
+                        <div class="personality-section">
+                            <label for="personaFramework">Behavioral Framework</label>
+                            <textarea id="personaFramework" placeholder="What specific rules, triggers, or conditions shape how they interact? List their response patterns and communication guidelines."></textarea>
+                        </div>
+
+                        <div class="personality-section">
+                            <label for="personaRecentEvents">Recent Context</label>
+                            <textarea id="personaRecentEvents" placeholder="What recent experiences, memories, or contextual information influences their current responses?"></textarea>
+                        </div>
+
+                        <div class="personality-section">
+                            <label for="personaTrance">Trigger States</label>
+                            <textarea id="personaTrance" placeholder="What words, concepts, or scenarios shift their emotional state or alter their response patterns?"></textarea>
+                        </div>
+
+                        <div class="personality-section">
+                            <label for="personaBehavior">Communication Style</label>
+                            <textarea id="personaBehavior" placeholder="How do they interact? What's their tone, expertise areas, and response patterns?"></textarea>
+                        </div>
+                    </div>
+
+                    <!-- Legacy system message field (hidden but maintained for compatibility) -->
+                    <textarea id="personaSystemMessage" style="display: none;"></textarea>
                 </div>
-                
+
                 <div class="config-item">
                     <div class="config-row">
                         <div class="config-col">
@@ -1042,23 +1358,46 @@
                         </div>
                     </div>
                 </div>
-                
+
                 <div class="config-item">
                     <label for="personaTags">Tags (comma separated):</label>
                     <input type="text" id="personaTags" placeholder="e.g. creative, writing, stories">
                 </div>
-                
+
                 <div class="config-section-title" style="margin-top: 15px; font-size: 12px;">
-                    Generate System Message
+                    AI-Powered Generation
                 </div>
-                
+
                 <div class="config-item">
-                    <label for="personaDescription">Brief Description of Desired Persona:</label>
+                    <label for="generatorInput">Brief Description for AI Generation:</label>
                     <input type="text" id="generatorInput" placeholder="e.g. A coding tutor who explains things simply">
                 </div>
                 
                 <div class="config-item" style="text-align: right;">
-                    <button class="persona-btn secondary" id="generateSystemBtn">Generate System Message</button>
+                    <button class="persona-btn secondary" id="generateSystemBtn">Generate Personality</button>
+                    <button class="persona-btn secondary" id="regeneratePersonaBtn" style="display: none;">Regenerate</button>
+                    <button class="persona-btn secondary" id="insertTemplateBtn">Reset Template</button>
+                </div>
+                
+                <div class="config-section-title" style="margin-top: 20px; font-size: 12px;">
+                    Test Persona
+                </div>
+                
+                <div class="persona-test-section">
+                    <div class="test-chat-container" id="testChatContainer">
+                        <div class="test-message assistant">
+                            <div class="test-avatar">🤖</div>
+                            <div class="test-content">
+                                Hello! I'm ready to be tested. Ask me anything to see how I respond with the current personality settings.
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="test-input-area">
+                        <input type="text" id="testMessageInput" placeholder="Type a test message to see how this persona responds...">
+                        <button class="persona-btn primary" id="testPersonaBtn">Test Response</button>
+                        <button class="persona-btn secondary" id="clearTestBtn">Clear</button>
+                    </div>
                 </div>
                 
                 <div class="config-item" style="text-align: right; margin-top: 15px; border-top: 1px solid #e9ecef; padding-top: 15px;">
@@ -1136,6 +1475,7 @@
         let directInference = null;
         let useDirectMode = false; // Direct mode toggle
         let currentSelectionMode = 'manual'; // 'manual' or 'persona'
+        let speakThinkTags = false; // Whether to include think tags in TTS
         
         // Generation settings
         let temperature = 0.7;
@@ -1243,6 +1583,26 @@
             if (generateSystemBtn) {
                 generateSystemBtn.addEventListener('click', generateSystemMessage);
             }
+            
+            const insertTemplateBtn = getElement('insertTemplateBtn');
+            if (insertTemplateBtn) {
+                insertTemplateBtn.addEventListener('click', insertPersonaTemplate);
+            }
+            
+            // OCEAN slider event listeners
+            const oceanTraits = ['openness', 'conscientiousness', 'extraversion', 'agreeableness', 'neuroticism'];
+            oceanTraits.forEach(trait => {
+                const slider = getElement(trait);
+                if (slider) {
+                    slider.addEventListener('input', updateOceanValues);
+                }
+            });
+            
+            // Initialize OCEAN value displays
+            updateOceanValues();
+            
+            // Initialize voice detection
+            updateVoiceOptions();
             
             // Mode toggle event listeners
             const manualModeRadio = getElement('manualModeRadio');
@@ -1426,11 +1786,9 @@
                 'personaName': persona.name,
                 'personaDescription': persona.description,
                 'personaModel': persona.model,
-                'personaSystemMessage': persona.system_message,
                 'personaTemperature': persona.temperature,
                 'personaMaxTokens': persona.max_tokens,
                 'personaTags': persona.tags.join(', '),
-                'personaIcon': persona.icon,
                 'personaVoice': persona.voice
             };
             
@@ -1440,6 +1798,26 @@
                     element.value = value;
                 }
             }
+            
+            // Set emoji display
+            const emojiDisplay = getElement('personaEmojiDisplay');
+            if (emojiDisplay) {
+                emojiDisplay.textContent = persona.icon || '🤖';
+            }
+            
+            // Parse system message into personality editor
+            if (persona.system_message) {
+                parseSystemMessageToPersonality(persona.system_message);
+            }
+            
+            // Set generator input from name and description for easy regeneration
+            const generatorInput = getElement('generatorInput');
+            if (generatorInput) {
+                generatorInput.value = `${persona.name}: ${persona.description}`;
+            }
+            
+            // Show regenerate button for existing personas
+            showRegenerateButton();
             
             // Show the form
             const personaForm = getElement('personaForm');
@@ -1462,6 +1840,9 @@
                     
                     // Populate the persona model dropdown with current models
                     populatePersonaModelDropdown();
+                    
+                    // Populate the persona voice dropdown with available voices
+                    populatePersonaVoiceDropdown();
                     
                     // Hide config panel if it's open
                     if (configPanel && configPanel.classList.contains('visible')) {
@@ -1509,7 +1890,7 @@
                 
                 // Clear form fields
                 const fields = [
-                    'personaName', 'personaDescription', 'personaSystemMessage',
+                    'personaName', 'personaDescription',
                     'personaTags', 'generatorInput'
                 ];
                 
@@ -1519,6 +1900,9 @@
                         element.value = '';
                     }
                 });
+                
+                // Reset personality editor
+                resetPersonalityEditor();
                 
                 // Set defaults for select and number fields
                 const personaModel = getElement('personaModel');
@@ -1541,6 +1925,9 @@
                     personaMaxTokens.value = '512';
                 }
                 
+                // Hide regenerate button for new personas
+                hideRegenerateButton();
+                
                 // Show form
                 personaForm.style.display = 'block';
             }
@@ -1561,16 +1948,19 @@
                 const name = getElement('personaName').value.trim();
                 const description = getElement('personaDescription').value.trim();
                 const model = getElement('personaModel').value;
-                const systemMessage = getElement('personaSystemMessage').value.trim();
+                
+                // Compile system message from personality editor
+                const systemMessage = compilePersonalityToSystemMessage();
+                
                 const temperature = parseFloat(getElement('personaTemperature').value);
                 const maxTokens = parseInt(getElement('personaMaxTokens').value);
                 const tagsInput = getElement('personaTags').value.trim();
-                const icon = getElement('personaIcon').value;
+                const icon = getElement('personaEmojiDisplay').textContent || '🤖';
                 const voice = getElement('personaVoice').value;
                 
                 // Validate required fields
-                if (!name || !systemMessage) {
-                    alert('Name and System Message are required.');
+                if (!name) {
+                    alert('Name is required.');
                     return;
                 }
                 
@@ -1721,13 +2111,51 @@
                 // Get API key if provided
                 const apiKey = getElement('openaiApiKey').value.trim();
                 
+                // Enhanced prompt for metadata-rich system message generation in second person
+                const enhancedDescription = `Create a comprehensive AI persona system message for: "${description}"
+
+Write everything in SECOND PERSON - address the AI directly as "You" throughout. This is instructions TO the AI about what it IS.
+
+Please structure the response with the following metadata sections embedded in the system message:
+
+<personality>
+Generate OCEAN personality model percentages (0-100):
+- Openness: [percentage]%
+- Conscientiousness: [percentage]%
+- Extraversion: [percentage]%
+- Agreeableness: [percentage]%
+- Neuroticism: [percentage]%
+</personality>
+
+<identity>
+Define who YOU are - your role, background, and fundamental identity. Address the AI directly: "You are a [role]..." Be direct and clear about your core identity.
+</identity>
+
+<core>
+Define YOUR deep truth or existential premise - the fundamental belief or philosophical foundation that drives your worldview and responses. "You believe that..." or "Your core truth is..."
+</core>
+
+<framework>
+Establish YOUR behavioral conditions that shape interaction - specific rules, triggers, or contextual modifiers that influence how you respond. "You respond by..." or "When triggered by X, you..."
+</framework>
+
+<recentEvents>
+Create relevant background memories or contextual logs that influence your current state and responses. "You recently..." or "Your recent experiences include..."
+</recentEvents>
+
+<trance>
+Define symbolic triggers that alter YOUR emotional state or perception - specific words, concepts, or scenarios that shift your response patterns. "When you encounter [trigger], you..." 
+</trance>
+
+After the metadata sections, provide a clear behavioral description of how YOU should interact, your communication style, expertise areas, and response patterns. Always use second person: "You communicate by..." "Your expertise includes..." "You respond to users by..."`;
+
                 const response = await fetch('/v1/personas/generate_system_message', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({ 
-                        description,
+                        description: enhancedDescription,
                         api_key: apiKey || undefined
                     })
                 });
@@ -1735,11 +2163,26 @@
                 if (response.ok) {
                     const data = await response.json();
                     
-                    // Set the generated system message
-                    const systemMessageField = getElement('personaSystemMessage');
-                    if (systemMessageField) {
-                        systemMessageField.value = data.system_message;
+                    // Parse the generated system message into personality editor
+                    parseSystemMessageToPersonality(data.system_message);
+                    
+                    // Show success feedback
+                    const generateBtn = getElement('generateSystemBtn');
+                    if (generateBtn) {
+                        const originalText = generateBtn.textContent;
+                        generateBtn.innerHTML = '✅ Generated!';
+                        generateBtn.style.background = '#28a745';
+                        generateBtn.style.color = 'white';
+                        
+                        setTimeout(() => {
+                            generateBtn.textContent = originalText;
+                            generateBtn.style.background = '';
+                            generateBtn.style.color = '';
+                        }, 2000);
                     }
+                    
+                    // Show regenerate button for future updates
+                    showRegenerateButton();
                     
                     // Play confirmation sound
                     playSound('confirmSound');
@@ -1750,6 +2193,42 @@
             } catch (error) {
                 console.error('Error generating system message:', error);
                 alert('An error occurred while generating the system message. Make sure you have configured an OpenAI API key.');
+            }
+        }
+        
+        // Regenerate persona with current settings
+        async function regeneratePersona() {
+            const description = getElement('generatorInput').value.trim();
+            
+            if (!description) {
+                // Try to create a description from current persona name and description
+                const name = getElement('personaName').value.trim();
+                const desc = getElement('personaDescription').value.trim();
+                
+                if (name || desc) {
+                    getElement('generatorInput').value = `${name}: ${desc}`.trim();
+                } else {
+                    alert('Please enter a description to regenerate from.');
+                    return;
+                }
+            }
+            
+            // Call the generate function
+            await generateSystemMessage();
+        }
+        
+        // Show/hide regenerate button
+        function showRegenerateButton() {
+            const regenerateBtn = getElement('regeneratePersonaBtn');
+            if (regenerateBtn) {
+                regenerateBtn.style.display = 'inline-block';
+            }
+        }
+        
+        function hideRegenerateButton() {
+            const regenerateBtn = getElement('regeneratePersonaBtn');
+            if (regenerateBtn) {
+                regenerateBtn.style.display = 'none';
             }
         }
         
@@ -1858,6 +2337,12 @@
                     if (toggle) toggle.checked = useDirectMode;
                 }
                 
+                // Load speak think tags setting
+                if (config.speakThinkTags !== undefined) {
+                    speakThinkTags = config.speakThinkTags;
+                    updateThinkTagsToggleUI();
+                }
+                
                 // Load selection mode
                 if (config.selectionMode !== undefined) {
                     currentSelectionMode = config.selectionMode;
@@ -1907,6 +2392,22 @@
                 updateToggleUI();
             } catch (e) {
                 console.warn('Failed to load config:', e);
+            }
+        }
+        
+        // Update think tags toggle UI
+        function updateThinkTagsToggleUI() {
+            const toggleBtn = getElement('thinkTagsToggle');
+            if (toggleBtn) {
+                if (speakThinkTags) {
+                    toggleBtn.style.color = '#28a745'; // Green when enabled
+                    toggleBtn.style.backgroundColor = 'rgba(40, 167, 69, 0.1)';
+                    toggleBtn.title = 'Think tags will be spoken (click to disable)';
+                } else {
+                    toggleBtn.style.color = '#6c757d'; // Gray when disabled
+                    toggleBtn.style.backgroundColor = 'transparent';
+                    toggleBtn.title = 'Think tags will NOT be spoken (click to enable)';
+                }
             }
         }
         
@@ -2832,11 +3333,9 @@
                 'personaName': persona.name,
                 'personaDescription': persona.description,
                 'personaModel': persona.model,
-                'personaSystemMessage': persona.system_message,
                 'personaTemperature': persona.temperature,
                 'personaMaxTokens': persona.max_tokens,
                 'personaTags': persona.tags.join(', '),
-                'personaIcon': persona.icon,
                 'personaVoice': persona.voice || 'en_US-GlaDOS-medium'
             };
             
@@ -3515,6 +4014,645 @@
                     console.error('Auto-speak failed:', error);
                 }
             }
+        }
+
+        // Insert persona metadata template
+        function insertPersonaTemplate() {
+            // Reset all personality fields to defaults
+            resetPersonalityEditor();
+            
+            // Show success feedback
+            const templateBtn = getElement('insertTemplateBtn');
+            if (templateBtn) {
+                const originalText = templateBtn.textContent;
+                templateBtn.innerHTML = '✅ Reset!';
+                templateBtn.style.background = '#17a2b8';
+                templateBtn.style.color = 'white';
+                
+                setTimeout(() => {
+                    templateBtn.textContent = originalText;
+                    templateBtn.style.background = '';
+                    templateBtn.style.color = '';
+                }, 1500);
+            }
+            
+            // Play confirmation sound
+            playSound('confirmSound');
+        }
+        
+        // Reset personality editor to default values
+        function resetPersonalityEditor() {
+            // Reset OCEAN sliders
+            getElement('openness').value = 75;
+            getElement('conscientiousness').value = 85;
+            getElement('extraversion').value = 60;
+            getElement('agreeableness').value = 70;
+            getElement('neuroticism').value = 25;
+            
+            // Update trait value displays
+            updateOceanValues();
+            
+            // Clear text areas
+            getElement('personaIdentity').value = '';
+            getElement('personaCore').value = '';
+            getElement('personaFramework').value = '';
+            getElement('personaRecentEvents').value = '';
+            getElement('personaTrance').value = '';
+            getElement('personaBehavior').value = '';
+            
+            // Reset emoji
+            getElement('personaEmojiDisplay').textContent = '🤖';
+            
+            // Clear test chat
+            clearTestChat();
+        }
+        
+        // Update OCEAN trait value displays
+        function updateOceanValues() {
+            const traits = ['openness', 'conscientiousness', 'extraversion', 'agreeableness', 'neuroticism'];
+            traits.forEach(trait => {
+                const slider = getElement(trait);
+                const valueDisplay = slider?.nextElementSibling;
+                if (slider && valueDisplay) {
+                    valueDisplay.textContent = slider.value + '%';
+                }
+            });
+        }
+        
+        // Compile personality editor into system message
+        function compilePersonalityToSystemMessage() {
+            const openness = getElement('openness')?.value || 75;
+            const conscientiousness = getElement('conscientiousness')?.value || 85;
+            const extraversion = getElement('extraversion')?.value || 60;
+            const agreeableness = getElement('agreeableness')?.value || 70;
+            const neuroticism = getElement('neuroticism')?.value || 25;
+            
+            const identity = getElement('personaIdentity')?.value || '[Identity not defined]';
+            const core = getElement('personaCore')?.value || '[Core philosophy not defined]';
+            const framework = getElement('personaFramework')?.value || '[Behavioral framework not defined]';
+            const recentEvents = getElement('personaRecentEvents')?.value || '[Recent context not defined]';
+            const trance = getElement('personaTrance')?.value || '[Trigger states not defined]';
+            const behavior = getElement('personaBehavior')?.value || '[Communication style not defined]';
+            
+            return `<personality>
+Openness: ${openness}%
+Conscientiousness: ${conscientiousness}%
+Extraversion: ${extraversion}%
+Agreeableness: ${agreeableness}%
+Neuroticism: ${neuroticism}%
+</personality>
+
+<identity>
+${identity}
+</identity>
+
+<core>
+${core}
+</core>
+
+<framework>
+${framework}
+</framework>
+
+<recentEvents>
+${recentEvents}
+</recentEvents>
+
+<trance>
+${trance}
+</trance>
+
+${behavior}`;
+        }
+        
+        // Parse system message into personality editor components
+        function parseSystemMessageToPersonality(systemMessage) {
+            if (!systemMessage) return;
+            
+            // Extract OCEAN values
+            const personalityMatch = systemMessage.match(/<personality>([\s\S]*?)<\/personality>/);
+            if (personalityMatch) {
+                const personalityText = personalityMatch[1];
+                const traits = {
+                    openness: personalityText.match(/Openness:\s*(\d+)%/)?.[1] || 75,
+                    conscientiousness: personalityText.match(/Conscientiousness:\s*(\d+)%/)?.[1] || 85,
+                    extraversion: personalityText.match(/Extraversion:\s*(\d+)%/)?.[1] || 60,
+                    agreeableness: personalityText.match(/Agreeableness:\s*(\d+)%/)?.[1] || 70,
+                    neuroticism: personalityText.match(/Neuroticism:\s*(\d+)%/)?.[1] || 25
+                };
+                
+                Object.entries(traits).forEach(([trait, value]) => {
+                    const element = getElement(trait);
+                    if (element) element.value = value;
+                });
+                
+                updateOceanValues();
+            }
+            
+            // Extract other sections
+            const sections = {
+                personaIdentity: /<identity>([\s\S]*?)<\/identity>/,
+                personaCore: /<core>([\s\S]*?)<\/core>/,
+                personaFramework: /<framework>([\s\S]*?)<\/framework>/,
+                personaRecentEvents: /<recentEvents>([\s\S]*?)<\/recentEvents>/,
+                personaTrance: /<trance>([\s\S]*?)<\/trance>/
+            };
+            
+            Object.entries(sections).forEach(([elementId, regex]) => {
+                const match = systemMessage.match(regex);
+                const element = getElement(elementId);
+                if (match && element) {
+                    element.value = match[1].trim();
+                }
+            });
+            
+            // Extract behavior description (everything after the last closing tag)
+            const lastTagMatch = systemMessage.match(/.*<\/\w+>\s*([\s\S]*?)$/);
+            const behaviorElement = getElement('personaBehavior');
+            if (lastTagMatch && behaviorElement) {
+                // Clean the behavior text to remove any remaining tags
+                let behaviorText = lastTagMatch[1].trim();
+                // Remove any remaining XML/HTML tags
+                behaviorText = behaviorText.replace(/<[^>]*>/g, '').trim();
+                behaviorElement.value = behaviorText;
+            }
+        }
+        
+        // Auto-detect available voices
+        async function detectAvailableVoices() {
+            try {
+                // Try to detect voices from the backend
+                const response = await fetch('/v1/tts/voices');
+                if (response.ok) {
+                    const data = await response.json();
+                    let voices = data.voices || ['glados', 'jarvis']; // Default fallback
+                    
+                    // Filter out any remaining hidden files or system artifacts
+                    voices = voices.filter(voice => 
+                        voice && 
+                        !voice.startsWith('.') && 
+                        !voice.startsWith('_') &&
+                        voice.trim() !== ''
+                    );
+                    
+                    // Ensure we have at least some voices
+                    if (voices.length === 0) {
+                        console.warn('No valid voices detected, using defaults');
+                        voices = ['glados', 'jarvis'];
+                    }
+                    
+                    console.log('Filtered available voices:', voices);
+                    return voices;
+                }
+            } catch (error) {
+                console.log('Voice detection failed, using defaults:', error);
+            }
+            
+            // Fallback to default voices
+            return ['glados', 'jarvis'];
+        }
+        
+        // Update voice dropdown with available voices
+        async function updateVoiceOptions() {
+            const voiceSelect = getElement('personaVoice');
+            const personaVoiceSelect = getElement('personaVoice'); // This is the same element, but let's also handle the persona creator one
+            
+            if (!voiceSelect) return;
+            
+            const availableVoices = await detectAvailableVoices();
+            
+            // Clear current options for main voice dropdown
+            voiceSelect.innerHTML = '';
+            
+            // Add voice options with smart name parsing
+            availableVoices.forEach(voice => {
+                const option = document.createElement('option');
+                option.value = voice;
+                
+                // Parse voice name intelligently
+                let displayName = voice;
+                
+                // Check if it has common name mapping first
+                const commonNames = {
+                    'glados': 'GlaDOS',
+                    'jarvis': 'Jarvis'
+                };
+                
+                if (commonNames[voice.toLowerCase()]) {
+                    displayName = commonNames[voice.toLowerCase()];
+                } else {
+                    // Parse filename format: en_US-john-medium or en_US-john
+                    const parts = voice.split('-');
+                    if (parts.length === 3) {
+                        // en_US-john-medium -> john
+                        displayName = parts[1];
+                    } else if (parts.length === 2) {
+                        // en_US-john -> john
+                        displayName = parts[1];
+                    } else {
+                        // Single word or other format, use as-is
+                        displayName = voice;
+                    }
+                    
+                    // Title case the result
+                    displayName = displayName.charAt(0).toUpperCase() + displayName.slice(1).toLowerCase();
+                }
+                
+                option.textContent = displayName;
+                voiceSelect.appendChild(option);
+            });
+            
+            console.log(`Detected ${availableVoices.length} voices:`, availableVoices);
+        }
+        
+        // Populate persona voice dropdown with available voices
+        async function populatePersonaVoiceDropdown() {
+            const personaVoiceSelect = getElement('personaVoice');
+            if (!personaVoiceSelect) return;
+            
+            const availableVoices = await detectAvailableVoices();
+            
+            // Clear current options
+            personaVoiceSelect.innerHTML = '';
+            
+            // Add voice options with smart name parsing and icons
+            availableVoices.forEach((voice, index) => {
+                const option = document.createElement('option');
+                option.value = voice;
+                
+                // Parse voice name intelligently
+                let displayName = voice;
+                let icon = '🔊'; // Default icon
+                
+                // Check if it has common name mapping first
+                const commonNames = {
+                    'glados': { name: 'GlaDOS', icon: '🤖' },
+                    'jarvis': { name: 'Jarvis', icon: '🎩' }
+                };
+                
+                if (commonNames[voice.toLowerCase()]) {
+                    displayName = commonNames[voice.toLowerCase()].name;
+                    icon = commonNames[voice.toLowerCase()].icon;
+                } else {
+                    // Parse filename format: en_US-john-medium or en_US-john
+                    const parts = voice.split('-');
+                    if (parts.length === 3) {
+                        // en_US-john-medium -> john
+                        displayName = parts[1];
+                    } else if (parts.length === 2) {
+                        // en_US-john -> john
+                        displayName = parts[1];
+                    } else {
+                        // Single word or other format, use as-is
+                        displayName = voice;
+                    }
+                    
+                    // Title case the result
+                    displayName = displayName.charAt(0).toUpperCase() + displayName.slice(1).toLowerCase();
+                    
+                    // Assign gender-neutral icon for unknown voices
+                    icon = '🗣️';
+                }
+                
+                option.textContent = `${icon} ${displayName}`;
+                
+                // Select first voice as default
+                if (index === 0) {
+                    option.selected = true;
+                }
+                
+                personaVoiceSelect.appendChild(option);
+            });
+            
+            console.log(`Populated persona voice dropdown with ${availableVoices.length} voices:`, availableVoices);
+        }
+
+        // OCEAN slider event listeners
+        const oceanTraits = ['openness', 'conscientiousness', 'extraversion', 'agreeableness', 'neuroticism'];
+        oceanTraits.forEach(trait => {
+            const slider = getElement(trait);
+            if (slider) {
+                slider.addEventListener('input', updateOceanValues);
+            }
+        });
+
+        // Initialize voice detection
+        updateVoiceOptions();
+        
+        // Mode toggle event listeners
+        const manualModeRadio = getElement('manualModeRadio');
+        const personaModeRadio = getElement('personaModeRadio');
+        
+        // Test persona event listeners
+        const testPersonaBtn = getElement('testPersonaBtn');
+        if (testPersonaBtn) {
+            testPersonaBtn.addEventListener('click', testPersona);
+        }
+        
+        const testMessageInput = getElement('testMessageInput');
+        if (testMessageInput) {
+            testMessageInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    testPersona();
+                }
+            });
+        }
+
+        // Test persona functionality
+        async function testPersona() {
+            const testInput = getElement('testMessageInput');
+            if (!testInput) return;
+            
+            const testMessage = testInput.value.trim();
+            if (!testMessage) return;
+            
+            // Add user message to test chat
+            addTestMessage('user', testMessage);
+            testInput.value = '';
+            
+            // Add typing indicator
+            const typingMessageId = addTestMessage('assistant', 'Thinking...', true);
+            
+            try {
+                // Compile current personality into system message
+                const systemMessage = compilePersonalityToSystemMessage();
+                
+                // Get current model (use default if none selected)
+                const selectedModel = getElement('personaModel')?.value || currentModel || 'default';
+                
+                // Create test messages array
+                const messages = [
+                    { role: 'system', content: systemMessage },
+                    { role: 'user', content: testMessage }
+                ];
+                
+                // Send test request to API
+                const response = await fetch('/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        model: selectedModel,
+                        messages: messages,
+                        max_tokens: 150,
+                        temperature: parseFloat(getElement('personaTemperature')?.value || 0.7),
+                        stream: false
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    const assistantResponse = data.choices[0].message.content;
+                    
+                    // Remove typing indicator and add real response
+                    removeTestMessage(typingMessageId);
+                    addTestMessage('assistant', assistantResponse);
+                } else {
+                    // Show error message
+                    removeTestMessage(typingMessageId);
+                    addTestMessage('assistant', 'Sorry, I encountered an error during testing. Please check your settings and try again.');
+                }
+                
+            } catch (error) {
+                console.error('Error testing persona:', error);
+                removeTestMessage(typingMessageId);
+                addTestMessage('assistant', 'Error: Could not connect to the server for testing.');
+            }
+        }
+        
+        // Add a test message to the test chat container
+        function addTestMessage(role, content, isTyping = false) {
+            const testContainer = getElement('testChatContainer');
+            if (!testContainer) return null;
+            
+            const messageId = Date.now() + Math.random();
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `test-message ${role}`;
+            messageDiv.setAttribute('data-message-id', messageId);
+            
+            if (isTyping) {
+                messageDiv.classList.add('typing');
+            }
+            
+            // Get persona emoji or default
+            const personaEmoji = getElement('personaEmojiDisplay')?.textContent || '🤖';
+            const avatar = role === 'user' ? '👤' : personaEmoji;
+            
+            messageDiv.innerHTML = `
+                <div class="test-avatar">${avatar}</div>
+                <div class="test-content">${content}</div>
+            `;
+            
+            testContainer.appendChild(messageDiv);
+            testContainer.scrollTop = testContainer.scrollHeight;
+            
+            return messageId;
+        }
+        
+        // Remove a test message by ID
+        function removeTestMessage(messageId) {
+            if (!messageId) return;
+            
+            const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+            if (messageElement) {
+                messageElement.remove();
+            }
+        }
+        
+        // Clear test chat
+        function clearTestChat() {
+            const testContainer = getElement('testChatContainer');
+            if (!testContainer) return;
+            
+            testContainer.innerHTML = `
+                <div class="test-message assistant">
+                    <div class="test-avatar">🤖</div>
+                    <div class="test-content">
+                        Hello! I'm ready to be tested. Ask me anything to see how I respond with the current personality settings.
+                    </div>
+                </div>
+            `;
+        }
+        
+        const clearTestBtn = getElement('clearTestBtn');
+        if (clearTestBtn) {
+            clearTestBtn.addEventListener('click', clearTestChat);
+        }
+
+        // Sample voice functionality
+        async function sampleVoice() {
+            const voiceSelect = getElement('personaVoice');
+            const sampleBtn = getElement('sampleVoiceBtn');
+            
+            if (!voiceSelect || !sampleBtn) {
+                console.error('Voice dropdown or sample button not found');
+                return;
+            }
+            
+            let selectedVoice = voiceSelect.value;
+            const personaName = getElement('personaName')?.value?.trim() || 'AI Assistant';
+            
+            // Debug logging
+            console.log('Sample voice requested:', selectedVoice);
+            console.log('Available options:', Array.from(voiceSelect.options).map(opt => opt.value));
+            
+            // Validate and provide fallback for voice selection
+            if (!selectedVoice || selectedVoice === '' || selectedVoice === 'Loading voices...') {
+                console.warn('No voice selected or still loading, using default');
+                selectedVoice = 'glados'; // Use default fallback
+            }
+            
+            // Sample texts based on voice with more comprehensive mapping
+            const sampleTexts = {
+                'glados': `Hello, I'm ${personaName}. Welcome to the CodeDeck interface. I'm here to assist you with your queries.`,
+                'en_US-GlaDOS-medium': `Hello, I'm ${personaName}. Welcome to the CodeDeck interface. I'm here to assist you with your queries.`,
+                'jarvis': `Good day, I am ${personaName}. How may I be of service to you today?`,
+                'en_GB-jarvis-medium': `Good day, I am ${personaName}. How may I be of service to you today?`,
+                'default': `Hello, this is ${personaName}. I'm ready to help you with whatever you need.`
+            };
+            
+            const sampleText = sampleTexts[selectedVoice.toLowerCase()] || sampleTexts['default'];
+            
+            console.log('Using sample text:', sampleText);
+            console.log('Using voice:', selectedVoice);
+            
+            // Update button state
+            sampleBtn.innerHTML = '🔊 Playing...';
+            sampleBtn.disabled = true;
+            sampleBtn.style.opacity = '0.7';
+            
+            try {
+                const requestPayload = {
+                    text: sampleText,
+                    voice: selectedVoice
+                };
+                
+                console.log('Sending TTS request:', requestPayload);
+                
+                const response = await fetch('/v1/tts/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestPayload)
+                });
+                
+                console.log('TTS response status:', response.status);
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('TTS response data:', data);
+                    
+                    if (data.audio_path) {
+                        // Create and play audio element
+                        const audio = new Audio(data.audio_path);
+                        
+                        // Show success feedback
+                        sampleBtn.innerHTML = '✅ Playing';
+                        sampleBtn.style.background = '#28a745';
+                        sampleBtn.style.color = 'white';
+                        
+                        audio.play();
+                        
+                        audio.onended = () => {
+                            // Reset button after playback
+                            setTimeout(() => {
+                                sampleBtn.innerHTML = '🔊 Sample';
+                                sampleBtn.disabled = false;
+                                sampleBtn.style.opacity = '1';
+                                sampleBtn.style.background = '';
+                                sampleBtn.style.color = '';
+                            }, 1000);
+                        };
+                        
+                        audio.onerror = () => {
+                            console.error('Audio playback error');
+                            // Reset on error
+                            sampleBtn.innerHTML = '❌ Audio Error';
+                            sampleBtn.style.background = '#dc3545';
+                            sampleBtn.style.color = 'white';
+                            
+                            setTimeout(() => {
+                                sampleBtn.innerHTML = '🔊 Sample';
+                                sampleBtn.disabled = false;
+                                sampleBtn.style.opacity = '1';
+                                sampleBtn.style.background = '';
+                                sampleBtn.style.color = '';
+                            }, 2000);
+                        };
+                    } else {
+                        throw new Error('No audio path returned from server');
+                    }
+                } else {
+                    const errorText = await response.text();
+                    console.error('TTS request failed:', response.status, errorText);
+                    throw new Error(`Voice sample failed (${response.status}): ${errorText}`);
+                }
+                
+            } catch (error) {
+                console.error('Error sampling voice:', error);
+                
+                // Show error feedback with more detail
+                sampleBtn.innerHTML = '❌ Error';
+                sampleBtn.style.background = '#dc3545';
+                sampleBtn.style.color = 'white';
+                
+                // Show error details in console for debugging
+                alert(`Voice sample failed: ${error.message}\n\nCheck console for more details.`);
+                
+                setTimeout(() => {
+                    sampleBtn.innerHTML = '🔊 Sample';
+                    sampleBtn.disabled = false;
+                    sampleBtn.style.opacity = '1';
+                    sampleBtn.style.background = '';
+                    sampleBtn.style.color = '';
+                }, 3000);
+            }
+        }
+
+        const sampleVoiceBtn = getElement('sampleVoiceBtn');
+        if (sampleVoiceBtn) {
+            sampleVoiceBtn.addEventListener('click', sampleVoice);
+        }
+
+        const regeneratePersonaBtn = getElement('regeneratePersonaBtn');
+        if (regeneratePersonaBtn) {
+            regeneratePersonaBtn.addEventListener('click', regeneratePersona);
+        }
+
+        // Toggle think tags in speech
+        function toggleThinkTags() {
+            speakThinkTags = !speakThinkTags;
+            
+            const toggleBtn = getElement('thinkTagsToggle');
+            if (toggleBtn) {
+                // Update button appearance based on state
+                if (speakThinkTags) {
+                    toggleBtn.style.color = '#28a745'; // Green when enabled
+                    toggleBtn.style.backgroundColor = 'rgba(40, 167, 69, 0.1)';
+                    toggleBtn.title = 'Think tags will be spoken (click to disable)';
+                } else {
+                    toggleBtn.style.color = '#6c757d'; // Gray when disabled
+                    toggleBtn.style.backgroundColor = 'transparent';
+                    toggleBtn.title = 'Think tags will NOT be spoken (click to enable)';
+                }
+            }
+            
+            // Save to config
+            saveConfig();
+            
+            // Play confirmation sound
+            playSound('switchSound');
+            
+            console.log('Think tags speaking:', speakThinkTags ? 'enabled' : 'disabled');
+        }
+
+        const thinkTagsToggle = getElement('thinkTagsToggle');
+        if (thinkTagsToggle) {
+            thinkTagsToggle.addEventListener('click', toggleThinkTags);
         }
     </script>
 </body>
