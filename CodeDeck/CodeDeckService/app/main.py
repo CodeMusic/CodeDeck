@@ -105,7 +105,7 @@ def create_app() -> FastAPI:
     if not os.path.exists(static_path):
         os.makedirs(static_path, exist_ok=True)
         logger.info(f"Created static directory: {static_path}")
-    app.mount("/static", StaticFiles(directory=static_path), name="static")
+        app.mount("/static", StaticFiles(directory=static_path), name="static")
     
     return app
 

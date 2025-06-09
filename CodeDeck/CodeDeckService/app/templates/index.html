@@ -1060,6 +1060,7 @@
             </div>
             <div id="systemMetrics" style="font-size: 11px; color: #bbb;">Loading...</div>
             <div id="modelInfo">Loading models...</div>
+            <div id="voiceStatus" style="font-size: 11px; color: #28a745; display: none;">🎙️ Preparing voice...</div>
             <div class="config-toggle" id="thinkTagsToggle" title="Toggle speaking think tags">💭</div>
             <div class="config-toggle" id="configToggleBtn">⚙️</div>
         </div>
@@ -1182,6 +1183,7 @@
                 </div>
                 <div class="config-item" style="text-align: right; margin-top: 10px;">
                     <button class="persona-btn success" id="saveApiKeyBtn">Save API Key</button>
+                    <button class="persona-btn secondary" id="clearApiKeyBtn">Clear API Key</button>
                 </div>
             </div>
         </div>
@@ -1436,9 +1438,9 @@
                 
                 <!-- Manual Mode Controls -->
                 <div id="manualControls" class="selection-group">
-                    <select id="modelSelect">
-                        <option value="">Loading models...</option>
-                    </select>
+                <select id="modelSelect">
+                    <option value="">Loading models...</option>
+                </select>
                 </div>
                 
                 <!-- Persona Mode Controls -->
@@ -1634,7 +1636,7 @@
             if (isHealthy) {
                 console.log("Server is healthy, loading components...");
                 await updateSystemMetrics();
-                await loadModels();
+            await loadModels();
                 await loadPersonas();
                 
                 // Update model info display after loading
@@ -1674,7 +1676,7 @@
                 const response = await fetch('/v1/personas');
                 
                 if (response.ok) {
-                    const data = await response.json();
+                const data = await response.json();
                     personas = data.data || [];
                     
                     console.log(`Loaded ${personas.length} personas`);
@@ -2085,6 +2087,9 @@
                 });
                 
                 if (response.ok) {
+                    // Save to localStorage for persistence
+                    localStorage.setItem('codeDeckOpenAIKey', apiKey);
+                    
                     alert('API key saved successfully!');
                     
                     // Clear the input field for security
@@ -2096,6 +2101,67 @@
             } catch (error) {
                 console.error('Error saving API key:', error);
                 alert('An error occurred while saving the API key.');
+            }
+        }
+        
+        // Clear OpenAI API key
+        async function clearApiKey() {
+            try {
+                if (!confirm('Are you sure you want to clear the stored API key?')) {
+                    return;
+                }
+                
+                // Clear from localStorage
+                localStorage.removeItem('codeDeckOpenAIKey');
+                
+                // Clear from server (send empty key)
+                const response = await fetch('/v1/personas/set_api_key', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ api_key: '' })
+                });
+                
+                if (response.ok) {
+                    alert('API key cleared successfully!');
+                    
+                    // Clear the input field
+                    getElement('openaiApiKey').value = '';
+                } else {
+                    const errorData = await response.json();
+                    alert(`Error: ${errorData.detail || 'Failed to clear API key'}`);
+                }
+            } catch (error) {
+                console.error('Error clearing API key:', error);
+                alert('An error occurred while clearing the API key.');
+            }
+        }
+        
+        // Load stored API key on page load
+        function loadStoredApiKey() {
+            try {
+                const storedKey = localStorage.getItem('codeDeckOpenAIKey');
+                if (storedKey) {
+                    const apiKeyInput = getElement('openaiApiKey');
+                    if (apiKeyInput) {
+                        // Show placeholder instead of actual key for security
+                        apiKeyInput.placeholder = 'API key is stored (enter new key to replace)';
+                    }
+                    
+                    // Set the key on the server for immediate use
+                    fetch('/v1/personas/set_api_key', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ api_key: storedKey })
+                    }).catch(error => {
+                        console.warn('Failed to restore API key on server:', error);
+                    });
+                }
+            } catch (error) {
+                console.warn('Failed to load stored API key:', error);
             }
         }
         
@@ -2128,23 +2194,23 @@ Generate OCEAN personality model percentages (0-100):
 </personality>
 
 <identity>
-Define who YOU are - your role, background, and fundamental identity. Address the AI directly: "You are a [role]..." Be direct and clear about your core identity.
+Who you are in one short, direct sentence.
 </identity>
 
 <core>
-Define YOUR deep truth or existential premise - the fundamental belief or philosophical foundation that drives your worldview and responses. "You believe that..." or "Your core truth is..."
+Your fundamental belief or truth in one clear sentence.
 </core>
 
 <framework>
-Establish YOUR behavioral conditions that shape interaction - specific rules, triggers, or contextual modifiers that influence how you respond. "You respond by..." or "When triggered by X, you..."
+How you approach interactions in one concise sentence.
 </framework>
 
 <recentEvents>
-Create relevant background memories or contextual logs that influence your current state and responses. "You recently..." or "Your recent experiences include..."
+One relevant recent experience that shapes your current state.
 </recentEvents>
 
 <trance>
-Define symbolic triggers that alter YOUR emotional state or perception - specific words, concepts, or scenarios that shift your response patterns. "When you encounter [trigger], you..." 
+One specific trigger that alters your response pattern.
 </trance>
 
 After the metadata sections, provide a clear behavioral description of how YOU should interact, your communication style, expertise areas, and response patterns. Always use second person: "You communicate by..." "Your expertise includes..." "You respond to users by..."`;
@@ -2440,7 +2506,8 @@ After the metadata sections, provide a clear behavioral description of how YOU s
                     topP,
                     systemMessage,
                     maxContextLength,
-                    voiceMode
+                    voiceMode,
+                    speakThinkTags
                 }));
                 
                 console.log('Saved config:', { 
@@ -2451,7 +2518,8 @@ After the metadata sections, provide a clear behavioral description of how YOU s
                     topP,
                     systemMessage,
                     maxContextLength,
-                    voiceMode
+                    voiceMode,
+                    speakThinkTags
                 });
                 updateModelInfo();
                 updateToggleUI();
@@ -2743,18 +2811,18 @@ After the metadata sections, provide a clear behavioral description of how YOU s
                     
                     // Send text to server for TTS processing with piper and play through aplay
                     const response = await fetch('/v1/tts/speak', {
-                        method: 'POST',
-                        headers: {
+                    method: 'POST',
+                    headers: {
                             'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
+                    },
+                    body: JSON.stringify({
                             text: text,
                             voice: voiceToUse
-                        })
-                    });
-                    
+                    })
+                });
+                
                     if (response.ok) {
-                        const data = await response.json();
+                const data = await response.json();
                         console.log('TTS: Speak request successful:', data);
                     } else {
                         console.error('TTS: Speak request failed:', response.status, await response.text());
@@ -2796,7 +2864,7 @@ After the metadata sections, provide a clear behavioral description of how YOU s
                             
                             console.log('TTS: Audio player added to message');
                         }
-                    } else {
+                } else {
                         console.error('TTS: Audio generation failed:', response.status, await response.text());
                     }
                 } else {
@@ -2843,7 +2911,7 @@ After the metadata sections, provide a clear behavioral description of how YOU s
                 });
                 
                 // Reset loading state
-                setLoading(false);
+            setLoading(false);
                 isGenerating = false;
                 
                 // Focus back on input field
@@ -3153,7 +3221,7 @@ After the metadata sections, provide a clear behavioral description of how YOU s
             // Handle different message types
             if (role === 'user') {
                 // For user messages, just add the content
-                messageContent.textContent = content;
+            messageContent.textContent = content;
             } else {
                 // For assistant messages, check if content is provided or if we need typing indicator
                 if (content && content.trim() !== '') {
@@ -3705,14 +3773,36 @@ After the metadata sections, provide a clear behavioral description of how YOU s
         
         // Clean text for TTS processing
         function cleanTextForTTS(text) {
-            // Remove thinking tags and their content (inner thoughts should not be spoken)
-            let cleaned = text
-                .replace(/<think>[\s\S]*?<\/think>/gi, ' ') // Remove <think> blocks
-                .replace(/<thought>[\s\S]*?<\/thought>/gi, ' ') // Remove <thought> blocks
-                .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, ' ') // Remove <reasoning> blocks
-                .replace(/<plan>[\s\S]*?<\/plan>/gi, ' ') // Remove <plan> blocks
-                .replace(/<observe>[\s\S]*?<\/observe>/gi, ' ') // Remove <observe> blocks
-                .replace(/<critique>[\s\S]*?<\/critique>/gi, ' ') // Remove <critique> blocks
+            let cleaned = text;
+            
+            // Only remove thinking tags if speakThinkTags is disabled
+            if (!speakThinkTags) {
+                cleaned = cleaned
+                    .replace(/<think>[\s\S]*?<\/think>/gi, ' ') // Remove <think> blocks
+                    .replace(/<thought>[\s\S]*?<\/thought>/gi, ' ') // Remove <thought> blocks
+                    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, ' ') // Remove <reasoning> blocks
+                    .replace(/<plan>[\s\S]*?<\/plan>/gi, ' ') // Remove <plan> blocks
+                    .replace(/<observe>[\s\S]*?<\/observe>/gi, ' ') // Remove <observe> blocks
+                    .replace(/<critique>[\s\S]*?<\/critique>/gi, ' '); // Remove <critique> blocks
+            } else {
+                // If speakThinkTags is enabled, just remove the XML tags but keep the content
+                cleaned = cleaned
+                    .replace(/<think>/gi, '') // Remove opening <think> tags
+                    .replace(/<\/think>/gi, ' ') // Remove closing </think> tags
+                    .replace(/<thought>/gi, '') // Remove opening <thought> tags
+                    .replace(/<\/thought>/gi, ' ') // Remove closing </thought> tags
+                    .replace(/<reasoning>/gi, '') // Remove opening <reasoning> tags
+                    .replace(/<\/reasoning>/gi, ' ') // Remove closing </reasoning> tags
+                    .replace(/<plan>/gi, '') // Remove opening <plan> tags
+                    .replace(/<\/plan>/gi, ' ') // Remove closing </plan> tags
+                    .replace(/<observe>/gi, '') // Remove opening <observe> tags
+                    .replace(/<\/observe>/gi, ' ') // Remove closing </observe> tags
+                    .replace(/<critique>/gi, '') // Remove opening <critique> tags
+                    .replace(/<\/critique>/gi, ' '); // Remove closing </critique> tags
+            }
+            
+            // Always remove code blocks and other formatting
+            cleaned = cleaned
                 .replace(/```[\s\S]*?```/g, ' ') // Remove code blocks
                 .replace(/<[^>]*>/g, ' ') // Remove remaining HTML/XML tags
                 .replace(/\*\*|\*|__|\|/g, ' ') // Remove markdown formatting
@@ -3769,6 +3859,22 @@ After the metadata sections, provide a clear behavioral description of how YOU s
             return 'glados'; // Default voice (simplified name)
         }
         
+        // Show voice preparation indicator
+        function showVoicePreparation() {
+            const voiceStatus = getElement('voiceStatus');
+            if (voiceStatus) {
+                voiceStatus.style.display = 'block';
+            }
+        }
+        
+        // Hide voice preparation indicator
+        function hideVoicePreparation() {
+            const voiceStatus = getElement('voiceStatus');
+            if (voiceStatus) {
+                voiceStatus.style.display = 'none';
+            }
+        }
+
         // Play audio in browser
         async function playAudioInBrowser(text, button) {
             // Check cooldown
@@ -3776,18 +3882,21 @@ After the metadata sections, provide a clear behavioral description of how YOU s
                 console.log('TTS cooldown active, ignoring request');
                 return;
             }
-            
+
             const cleanText = cleanTextForTTS(text);
             if (!cleanText) {
                 console.warn('No clean text available for TTS');
                 return;
             }
-            
+
+            // Show voice preparation indicator
+            showVoicePreparation();
+
             // Update button state
             button.classList.add('loading');
             button.innerHTML = '▶️ Play ⏳';
             button.disabled = true;
-            
+
             try {
                 const voice = getCurrentVoice();
                 const response = await fetch('/v1/tts/generate', {
@@ -3800,31 +3909,34 @@ After the metadata sections, provide a clear behavioral description of how YOU s
                         voice: voice
                     })
                 });
-                
+
                 if (response.ok) {
                     const data = await response.json();
-                    
+
                     if (data.audio_path) {
                         // Create and play audio element
                         const audio = new Audio(data.audio_path);
-                        
+
+                        // Hide voice preparation indicator
+                        hideVoicePreparation();
+
                         // Show success feedback immediately
                         showTTSSuccess(button, 'Generated!', 1500);
-                        
+
                         audio.play();
-                        
+
                         // Update button during playback
                         button.innerHTML = '⏸️ Playing';
-                        
+
                         audio.onended = () => {
                             button.classList.remove('loading');
                             button.innerHTML = '▶️ Play';
                             button.disabled = false;
-                            
+
                             // Apply cooldown after successful playback
                             applyTTSCooldown();
                         };
-                        
+
                         audio.onerror = () => {
                             button.classList.remove('loading');
                             button.innerHTML = '▶️ Play';
@@ -3839,12 +3951,15 @@ After the metadata sections, provide a clear behavioral description of how YOU s
                 }
             } catch (error) {
                 console.error('Error playing audio:', error);
-                
+
+                // Hide voice preparation indicator
+                hideVoicePreparation();
+
                 // Show error feedback
                 button.innerHTML = '❌ Error';
                 button.style.background = '#dc3545';
                 button.style.color = 'white';
-                
+
                 setTimeout(() => {
                     button.classList.remove('loading');
                     button.innerHTML = '▶️ Play';
@@ -3854,7 +3969,7 @@ After the metadata sections, provide a clear behavioral description of how YOU s
                 }, 2000);
             }
         }
-        
+
         // Speak audio on device
         async function speakAudioOnDevice(text, button) {
             // Check cooldown
@@ -3862,18 +3977,21 @@ After the metadata sections, provide a clear behavioral description of how YOU s
                 console.log('TTS cooldown active, ignoring request');
                 return;
             }
-            
+
             const cleanText = cleanTextForTTS(text);
             if (!cleanText) {
                 console.warn('No clean text available for TTS');
                 return;
             }
-            
+
+            // Show voice preparation indicator
+            showVoicePreparation();
+
             // Update button state
             button.classList.add('loading');
             button.innerHTML = '🔈 Speak ⏳';
             button.disabled = true;
-            
+
             try {
                 const voice = getCurrentVoice();
                 const response = await fetch('/v1/tts/speak', {
@@ -3886,26 +4004,29 @@ After the metadata sections, provide a clear behavioral description of how YOU s
                         voice: voice
                     })
                 });
-                
+
                 if (response.ok) {
                     const data = await response.json();
                     console.log('TTS speak request successful:', data);
-                    
+
+                    // Hide voice preparation indicator
+                    hideVoicePreparation();
+
                     // Show success feedback
                     showTTSSuccess(button, 'Speaking!', 2000);
-                    
+
                     // Provide visual feedback during speaking
                     button.innerHTML = '🔊 Speaking';
-                    
+
                     // Estimate speaking duration (approximately 150 words per minute)
                     const wordCount = cleanText.split(/\s+/).length;
                     const estimatedDuration = Math.max(3000, (wordCount / 150) * 60 * 1000); // Minimum 3 seconds
-                    
+
                     setTimeout(() => {
                         button.classList.remove('loading');
                         button.innerHTML = '🔈 Speak';
                         button.disabled = false;
-                        
+
                         // Apply cooldown after successful speech
                         applyTTSCooldown();
                     }, estimatedDuration);
@@ -3914,12 +4035,15 @@ After the metadata sections, provide a clear behavioral description of how YOU s
                 }
             } catch (error) {
                 console.error('Error speaking audio:', error);
-                
+
+                // Hide voice preparation indicator
+                hideVoicePreparation();
+
                 // Show error feedback
                 button.innerHTML = '❌ Error';
                 button.style.background = '#dc3545';
                 button.style.color = 'white';
-                
+
                 setTimeout(() => {
                     button.classList.remove('loading');
                     button.innerHTML = '🔈 Speak';
@@ -3954,6 +4078,9 @@ After the metadata sections, provide a clear behavioral description of how YOU s
             if (voiceMode === 'audio_file') {
                 // Auto-play in browser
                 try {
+                    // Show voice preparation indicator
+                    showVoicePreparation();
+                    
                     const voice = getCurrentVoice();
                     const response = await fetch('/v1/tts/generate', {
                         method: 'POST',
@@ -3971,6 +4098,12 @@ After the metadata sections, provide a clear behavioral description of how YOU s
                         if (data.audio_path) {
                             const audio = new Audio(data.audio_path);
                             audio.autoplay = true;
+                            
+                            // Hide voice preparation indicator when audio starts
+                            audio.onloadeddata = () => {
+                                hideVoicePreparation();
+                            };
+                            
                             audio.play();
                             
                             // Apply cooldown after automatic playback starts
@@ -3981,15 +4114,20 @@ After the metadata sections, provide a clear behavioral description of how YOU s
                             console.log('Auto-play successful');
                         }
                     } else {
+                        hideVoicePreparation();
                         console.error('Auto-play generation failed:', await response.text());
                     }
                 } catch (error) {
+                    hideVoicePreparation();
                     console.error('Auto-play failed:', error);
                 }
             } 
             else if (voiceMode === 'speak') {
                 // Auto-speak on device
                 try {
+                    // Show voice preparation indicator
+                    showVoicePreparation();
+                    
                     const voice = getCurrentVoice();
                     const response = await fetch('/v1/tts/speak', {
                         method: 'POST',
@@ -4003,14 +4141,21 @@ After the metadata sections, provide a clear behavioral description of how YOU s
                     });
                     
                     if (response.ok) {
+                        // Hide voice preparation indicator after request is sent
+                        setTimeout(() => {
+                            hideVoicePreparation();
+                        }, 500);
+                        
                         console.log('Auto-speak successful');
                         
                         // Apply cooldown after successful auto-speak
                         applyTTSCooldown();
                     } else {
+                        hideVoicePreparation();
                         console.error('Auto-speak failed:', await response.text());
                     }
                 } catch (error) {
+                    hideVoicePreparation();
                     console.error('Auto-speak failed:', error);
                 }
             }
@@ -4627,19 +4772,8 @@ ${behavior}`;
         function toggleThinkTags() {
             speakThinkTags = !speakThinkTags;
             
-            const toggleBtn = getElement('thinkTagsToggle');
-            if (toggleBtn) {
-                // Update button appearance based on state
-                if (speakThinkTags) {
-                    toggleBtn.style.color = '#28a745'; // Green when enabled
-                    toggleBtn.style.backgroundColor = 'rgba(40, 167, 69, 0.1)';
-                    toggleBtn.title = 'Think tags will be spoken (click to disable)';
-                } else {
-                    toggleBtn.style.color = '#6c757d'; // Gray when disabled
-                    toggleBtn.style.backgroundColor = 'transparent';
-                    toggleBtn.title = 'Think tags will NOT be spoken (click to enable)';
-                }
-            }
+            // Update UI appearance
+            updateThinkTagsToggleUI();
             
             // Save to config
             saveConfig();
@@ -4654,6 +4788,20 @@ ${behavior}`;
         if (thinkTagsToggle) {
             thinkTagsToggle.addEventListener('click', toggleThinkTags);
         }
+        
+        // API Key event listeners
+        const saveApiKeyBtn = getElement('saveApiKeyBtn');
+        if (saveApiKeyBtn) {
+            saveApiKeyBtn.addEventListener('click', saveApiKey);
+        }
+        
+        const clearApiKeyBtn = getElement('clearApiKeyBtn');
+        if (clearApiKeyBtn) {
+            clearApiKeyBtn.addEventListener('click', clearApiKey);
+        }
+        
+        // Load stored API key on page load
+        loadStoredApiKey();
     </script>
 </body>
 </html> 
