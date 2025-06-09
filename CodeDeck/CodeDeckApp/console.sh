@@ -21,13 +21,509 @@ GLADOS_PERSONA_ID="assistant-default"  # Default assistant persona
 DEFAULT_MODEL="deepseek_r1_distill_qwen_1_5b_q4_0"  # Current available model
 VOICE_ENABLED=false  # Toggle for voice responses
 
+# ── SOUND EFFECTS ──
+SOUND_EFFECTS_DIR="$(dirname "$0")/assets"  # Sound effects directory
+SOUND_ENABLED=true  # Toggle for sound effects
+
 # ── SESSION STATE ──
 SESSION_SYSTEM_MESSAGE=""  # Current session system message
 MESSAGE_HISTORY=()  # Array to store conversation history
 CONTEXT_LENGTH=5  # Number of message pairs to include in context
 CURRENT_MODEL="$DEFAULT_MODEL"  # Currently selected model
 
-# ── API COMMUNICATION FUNCTIONS ──
+# ── BATTERY & CACHING ──
+LAST_BATTERY_WARNING=100  # Track last battery warning level
+SPEECH_CACHE_DIR="$HOME/.codedeck/speech_cache"  # Directory for cached speech files
+
+# ── INTERRUPT HANDLING ──
+GENERATION_PID=""  # Track the current generation process
+INTERRUPT_REQUESTED=false  # Flag for interrupt requests
+
+# ── TERMINAL DETECTION ──
+# Detect if we're running over SSH or locally
+IS_SSH_SESSION=false
+if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ] || [ -n "$SSH_CONNECTION" ]; then
+    IS_SSH_SESSION=true
+fi
+
+# Function to handle interrupt signals
+handle_interrupt() {
+    INTERRUPT_REQUESTED=true
+    if [ -n "$GENERATION_PID" ]; then
+        kill -TERM "$GENERATION_PID" 2>/dev/null
+    fi
+    echo -e "\n$YELLOW[⚠] Generation interrupted by user$RESET"
+    
+    # Only reset terminal state if needed, and do it gently
+    if [ "$IS_SSH_SESSION" = true ]; then
+        stty sane 2>/dev/null || true
+    else
+        # For local terminals, be more careful
+        stty echo 2>/dev/null || true
+        stty icanon 2>/dev/null || true
+    fi
+}
+
+# Set up interrupt handlers
+trap handle_interrupt SIGINT SIGTERM
+
+# ── TERMINAL RECOVERY ──
+
+# Function to recover terminal state - only when actually needed
+recover_terminal_state() {
+    echo -e "$DIM_PURPLE[🔧 Recovering terminal state...]$RESET"
+    
+    # Reset terminal settings based on session type
+    if [ "$IS_SSH_SESSION" = true ]; then
+        # SSH sessions can handle full stty sane
+        stty sane 2>/dev/null || true
+    else
+        # Local terminals - be more gentle
+        stty echo 2>/dev/null || true
+        stty icanon 2>/dev/null || true
+        stty -raw 2>/dev/null || true
+    fi
+    
+    # Clear any pending input only if needed
+    if read -r -t 0 2>/dev/null; then
+        while read -r -t 0.1 2>/dev/null; do
+            break
+        done
+    fi
+    
+    # Reset interrupt flag
+    INTERRUPT_REQUESTED=false
+    
+    # Clear generation PID
+    GENERATION_PID=""
+    
+    echo -e "$GREEN[✓ Terminal state recovered]$RESET"
+}
+
+# ── INITIALIZATION ──
+
+# Create speech cache directory
+mkdir -p "$SPEECH_CACHE_DIR"
+
+# ── BATTERY MONITORING FUNCTIONS ──
+
+# Function to get battery percentage
+get_battery_percentage() {
+    local battery_percent=""
+    
+    # Try different methods based on the system
+    if command -v pmset >/dev/null 2>&1; then
+        # macOS
+        battery_percent=$(pmset -g batt | grep -Eo "[0-9]+%" | head -1 | tr -d '%')
+    elif [ -f /sys/class/power_supply/BAT0/capacity ]; then
+        # Linux - most common location
+        battery_percent=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null)
+    elif [ -f /sys/class/power_supply/BAT1/capacity ]; then
+        # Linux - alternative battery location
+        battery_percent=$(cat /sys/class/power_supply/BAT1/capacity 2>/dev/null)
+    elif command -v upower >/dev/null 2>&1; then
+        # Linux with upower - try different battery paths
+        local bat_path=$(upower -e | grep -i bat | head -1)
+        if [ -n "$bat_path" ]; then
+            battery_percent=$(upower -i "$bat_path" | grep -E "percentage" | awk '{print $2}' | tr -d '%')
+        fi
+    elif command -v acpi >/dev/null 2>&1; then
+        # Linux with acpi
+        battery_percent=$(acpi -b | grep -P -o '[0-9]+(?=%)' | head -1)
+    elif [ -d /proc/acpi/battery ]; then
+        # Older Linux systems
+        for battery in /proc/acpi/battery/BAT*; do
+            if [ -f "$battery/state" ]; then
+                local remaining=$(grep "remaining capacity" "$battery/state" | awk '{print $3}')
+                local full=$(grep "last full capacity" "$battery/info" | awk '{print $4}')
+                if [ -n "$remaining" ] && [ -n "$full" ] && [ "$full" -gt 0 ]; then
+                    battery_percent=$((remaining * 100 / full))
+                    break
+                fi
+            fi
+        done
+    elif command -v cat >/dev/null 2>&1 && [ -f /sys/class/power_supply/battery/capacity ]; then
+        # Some systems use 'battery' instead of 'BAT0'
+        battery_percent=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null)
+    elif command -v cat >/dev/null 2>&1; then
+        # Try to find any power supply with capacity
+        for ps in /sys/class/power_supply/*/capacity; do
+            if [ -f "$ps" ]; then
+                battery_percent=$(cat "$ps" 2>/dev/null)
+                if [ -n "$battery_percent" ] && [ "$battery_percent" -le 100 ]; then
+                    break
+                fi
+            fi
+        done
+    fi
+    
+    # Return the percentage or empty if not found
+    echo "$battery_percent"
+}
+
+# Function to get charging status
+get_charging_status() {
+    local charging=""
+    
+    if command -v pmset >/dev/null 2>&1; then
+        # macOS
+        charging=$(pmset -g batt | grep -o "AC Power\|Battery Power")
+    elif [ -f /sys/class/power_supply/BAT0/status ]; then
+        # Linux
+        charging=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null)
+    elif [ -f /sys/class/power_supply/BAT1/status ]; then
+        # Linux alternative
+        charging=$(cat /sys/class/power_supply/BAT1/status 2>/dev/null)
+    elif command -v upower >/dev/null 2>&1; then
+        # Linux with upower
+        local bat_path=$(upower -e | grep -i bat | head -1)
+        if [ -n "$bat_path" ]; then
+            charging=$(upower -i "$bat_path" | grep -E "state" | awk '{print $2}')
+        fi
+    elif command -v acpi >/dev/null 2>&1; then
+        # Linux with acpi - get charging status
+        charging=$(acpi -a | grep -o "on-line\|off-line")
+    elif [ -f /sys/class/power_supply/AC0/online ]; then
+        # Check AC adapter status
+        local ac_online=$(cat /sys/class/power_supply/AC0/online 2>/dev/null)
+        if [ "$ac_online" = "1" ]; then
+            charging="Charging"
+        else
+            charging="Discharging"
+        fi
+    elif [ -f /sys/class/power_supply/ADP0/online ]; then
+        # Alternative AC adapter path
+        local ac_online=$(cat /sys/class/power_supply/ADP0/online 2>/dev/null)
+        if [ "$ac_online" = "1" ]; then
+            charging="Charging"
+        else
+            charging="Discharging"
+        fi
+    fi
+    
+    echo "$charging"
+}
+
+# Function to display battery status
+show_battery_status() {
+    local battery_percent
+    local charging_status
+    local battery_icon
+    local charging_icon
+    
+    battery_percent=$(get_battery_percentage)
+    charging_status=$(get_charging_status)
+    
+    if [ -z "$battery_percent" ]; then
+        echo -e "$RED🔋 Battery: $YELLOW[Unable to detect]$RESET"
+        return
+    fi
+    
+    # Choose battery icon based on level
+    if [ "$battery_percent" -ge 75 ]; then
+        battery_icon="🔋"
+    elif [ "$battery_percent" -ge 50 ]; then
+        battery_icon="🔋"
+    elif [ "$battery_percent" -ge 25 ]; then
+        battery_icon="🪫"
+    else
+        battery_icon="🪫"
+    fi
+    
+    # Choose charging icon and status
+    if [[ "$charging_status" =~ (Charging|AC\ Power|on-line) ]]; then
+        charging_icon="⚡"
+    else
+        charging_icon=""
+    fi
+    
+    # Use bright, distinct colors for battery percentage
+    local battery_color
+    local battery_bg=""
+    if [ "$battery_percent" -ge 75 ]; then
+        battery_color="\e[1;92m"  # Bright green
+    elif [ "$battery_percent" -ge 50 ]; then
+        battery_color="\e[1;93m"  # Bright yellow
+    elif [ "$battery_percent" -ge 20 ]; then
+        battery_color="\e[1;91m"  # Bright red
+    else
+        battery_color="\e[1;97;41m"  # Bright white on red background (critical)
+        battery_bg=" [CRITICAL]"
+    fi
+    
+    # Display with distinct formatting
+    echo -e "$DIM_PURPLE$battery_icon Battery: $battery_color$battery_percent%$charging_icon$battery_bg$RESET"
+}
+
+# Function to check battery warnings
+check_battery_warnings() {
+    local battery_percent
+    battery_percent=$(get_battery_percentage)
+    
+    if [ -z "$battery_percent" ]; then
+        return
+    fi
+    
+    # Check if we need to warn at specific thresholds
+    local warning_levels=(50 20 10 5)
+    local charging_status
+    charging_status=$(get_charging_status)
+    
+    # Don't warn if charging
+    if [[ "$charging_status" =~ (Charging|AC\ Power|on-line) ]]; then
+        LAST_BATTERY_WARNING=100  # Reset warnings when charging
+        return
+    fi
+    
+    for level in "${warning_levels[@]}"; do
+        if [ "$battery_percent" -le "$level" ] && [ "$LAST_BATTERY_WARNING" -gt "$level" ]; then
+            LAST_BATTERY_WARNING="$level"
+            
+            # Show warning
+            local warning_color
+            if [ "$level" -le 10 ]; then
+                warning_color="$RED"
+            else
+                warning_color="$YELLOW"
+            fi
+            
+            echo ""
+            echo -e "$warning_color⚠️  BATTERY WARNING: $battery_percent% remaining$RESET"
+            
+            # Speak warning if voice enabled
+            if [ "$VOICE_ENABLED" = true ]; then
+                speak_routine_message "battery_warning_$level" "Battery at $battery_percent percent. Consider charging soon."
+            fi
+            echo ""
+            break
+        fi
+    done
+}
+
+# Function to show detailed battery information
+check_battery_command() {
+    local battery_percent
+    local charging_status
+    
+    echo -e "$DIM_PURPLE[🔋 Battery Diagnostic Check...]$RESET"
+    
+    battery_percent=$(get_battery_percentage)
+    charging_status=$(get_charging_status)
+    
+    if [ -z "$battery_percent" ]; then
+        echo -e "$RED❌ Battery detection failed$RESET"
+        echo -e "$YELLOW💡 Attempting alternative detection methods...$RESET"
+        
+        # Try to provide diagnostic information
+        echo -e "$DIM_PURPLE"
+        echo "Available power supply paths:"
+        if [ -d /sys/class/power_supply ]; then
+            ls -la /sys/class/power_supply/ 2>/dev/null || echo "  No /sys/class/power_supply directory"
+        else
+            echo "  No /sys/class/power_supply directory found"
+        fi
+        
+        echo ""
+        echo "Available detection tools:"
+        command -v pmset >/dev/null 2>&1 && echo "  ✓ pmset (macOS)" || echo "  ✗ pmset"
+        command -v upower >/dev/null 2>&1 && echo "  ✓ upower" || echo "  ✗ upower"
+        command -v acpi >/dev/null 2>&1 && echo "  ✓ acpi" || echo "  ✗ acpi"
+        echo -e "$RESET"
+        
+        # Try upower diagnostic if available
+        if command -v upower >/dev/null 2>&1; then
+            echo -e "$YELLOW🔍 upower diagnostic:$RESET"
+            upower -l 2>/dev/null | head -10 || echo "  upower failed to list devices"
+        fi
+        
+        return
+    fi
+    
+    # Display detailed battery information
+    echo -e "$GREEN✓ Battery detected successfully$RESET"
+    echo ""
+    
+    # Show detailed status
+    show_battery_status
+    
+    # Additional details
+    echo -e "$DIM_PURPLE┌─────────────────────────────────────────────────────┐$RESET"
+    echo -e "$DIM_PURPLE│                BATTERY DETAILS                     │$RESET"
+    echo -e "$DIM_PURPLE└─────────────────────────────────────────────────────┘$RESET"
+    
+    local status_text="Discharging"
+    if [[ "$charging_status" =~ (Charging|AC\ Power|on-line) ]]; then
+        status_text="Charging"
+    fi
+    
+    echo -e "$CYAN📊 Level: $battery_percent%$RESET"
+    echo -e "$CYAN🔌 Status: $status_text$RESET"
+    echo -e "$CYAN⚠️  Last Warning: $LAST_BATTERY_WARNING%$RESET"
+    
+    # Health assessment
+    if [ "$battery_percent" -ge 75 ]; then
+        echo -e "$GREEN💚 Health: Excellent$RESET"
+    elif [ "$battery_percent" -ge 50 ]; then
+        echo -e "$YELLOW💛 Health: Good$RESET"
+    elif [ "$battery_percent" -ge 20 ]; then
+        echo -e "$ORANGE🧡 Health: Low - Consider charging$RESET"
+    else
+        echo -e "$RED❤️  Health: Critical - Charge immediately$RESET"
+    fi
+    
+    # Voice feedback if enabled
+    if [ "$VOICE_ENABLED" = true ]; then
+        if [ "$battery_percent" -le 20 ]; then
+            speak_routine_message "battery_check_low" "Battery level is $battery_percent percent. You should charge soon."
+        else
+            speak_routine_message "battery_check_good" "Battery level is $battery_percent percent."
+        fi
+    fi
+}
+
+# ── CACHED SPEECH SYSTEM ──
+
+# Function to speak routine messages with automatic caching
+speak_routine_message() {
+    local cache_key="$1"
+    local message="$2"
+    
+    [ -z "$message" ] && return 1
+    
+    local cache_file="$SPEECH_CACHE_DIR/${cache_key}.wav"
+    
+    # Auto-fix cache directory permissions if needed
+    mkdir -p "$SPEECH_CACHE_DIR" 2>/dev/null || {
+        chmod -R 755 "$SPEECH_CACHE_DIR" 2>/dev/null
+        chown -R "$(whoami):$(id -gn)" "$SPEECH_CACHE_DIR" 2>/dev/null
+    }
+    
+    # Try cached version first
+    if [ -f "$cache_file" ] && [ -s "$cache_file" ]; then
+        # Quick validation - ensure it's not a JSON error
+        if ! head -c 1 "$cache_file" 2>/dev/null | grep -q "{"; then
+            echo -ne "$DIM_PURPLE[🔊 ♪]$RESET"
+            aplay "$cache_file" >/dev/null 2>&1 &
+            return 0
+        fi
+        # Remove corrupted cache
+        rm -f "$cache_file" 2>/dev/null
+    fi
+    
+    # Generate new audio
+    echo -ne "$DIM_PURPLE[🎤 ♪]$RESET"
+    local temp_audio="/tmp/codedeck_voice_$(date +%s)_$$.wav"
+    
+    # Get audio from API
+    if curl -s -X POST "$CODEDECK_API/v1/tts/speak" \
+        -H "Content-Type: application/json" \
+        -d "{\"text\": \"$message\", \"voice\": \"glados\", \"audio_file\": true}" \
+        -o "$temp_audio" 2>/dev/null && [ -s "$temp_audio" ]; then
+        
+        # Validate audio file
+        if ! head -c 1 "$temp_audio" 2>/dev/null | grep -q "{"; then
+            # Try to save to cache (best effort)
+            cp "$temp_audio" "$cache_file" 2>/dev/null
+            
+            # Play audio
+            aplay "$temp_audio" >/dev/null 2>&1 &
+            
+            # Clean up temp file after delay
+            (sleep 5 && rm -f "$temp_audio") &
+            return 0
+        fi
+    fi
+    
+    # Cleanup on failure
+    rm -f "$temp_audio" 2>/dev/null
+    echo -ne "$DIM_PURPLE[🔊 ✗]$RESET"
+    return 1
+}
+
+# Function to clear all cached voice clips
+purge_cognitive_cache()
+{
+    local cache_dir="$SPEECH_CACHE_DIR"
+    local cache_count=0
+    local cache_size=0
+    
+    echo -e "$DIM_PURPLE[🗑️ Analyzing cognitive cache...]$RESET"
+    
+    # Count cache files if directory exists
+    if [ -d "$cache_dir" ]; then
+        cache_count=$(find "$cache_dir" -name "*.wav" 2>/dev/null | wc -l)
+        if [ "$cache_count" -gt 0 ]; then
+            # Calculate total size
+            cache_size=$(find "$cache_dir" -name "*.wav" -exec ls -l {} \; 2>/dev/null | awk '{sum+=$5} END {print sum+0}')
+            local size_mb=$(( cache_size / 1024 / 1024 ))
+            
+            echo -e "$YELLOW[📊 Found $cache_count cached voice clips (~${size_mb}MB)]$RESET"
+            echo -e "$DIM_PURPLE[🗑️ Purging voice cache...]$RESET"
+            
+            # Remove all wav files
+            find "$cache_dir" -name "*.wav" -delete 2>/dev/null
+            
+            # Verify deletion
+            local remaining=$(find "$cache_dir" -name "*.wav" 2>/dev/null | wc -l)
+            if [ "$remaining" -eq 0 ]; then
+                echo -e "$GREEN[✓ Cache purged successfully - freed ${size_mb}MB]$RESET"
+                play_sound_effect "confirm"
+            else
+                echo -e "$YELLOW[⚠ Partial purge - $remaining files remain]$RESET"
+            fi
+        else
+            echo -e "$GREEN[✓ Cache already empty]$RESET"
+        fi
+    else
+        echo -e "$GREEN[✓ No cache directory found]$RESET"
+    fi
+    
+    # Voice feedback if enabled
+    if [ "$VOICE_ENABLED" = true ]; then
+        # Don't use cached message since we just cleared cache :)
+        speak_routine_message "voice_cache_cleared" "Voice cache cleared."
+    fi
+}
+
+# Function to play sound effects in background
+play_sound_effect() {
+    local sound_name="$1"
+    
+    if [ "$SOUND_ENABLED" != true ]; then
+        return
+    fi
+    
+    local sound_file="$SOUND_EFFECTS_DIR/${sound_name}.wav"
+    
+    if [ -f "$sound_file" ]; then
+        # For local terminals, be more careful with background processes
+        if [ "$IS_SSH_SESSION" = true ]; then
+            aplay "$sound_file" >/dev/null 2>&1 &
+        else
+            # On local terminals, use simpler audio playback to avoid TTY conflicts
+            (aplay "$sound_file" >/dev/null 2>&1) &
+        fi
+    fi
+}
+
+# Function to toggle sound effects
+toggle_sound_effects() {
+    if [ "$SOUND_ENABLED" = true ]; then
+        SOUND_ENABLED=false
+        show_property_change "Sound effects DISABLED" "Silent mode" "🔇"
+    else
+        SOUND_ENABLED=true
+        show_property_change "Sound effects ENABLED" "Audio feedback active" "🔊"
+        echo -e "$DIM_PURPLE[Testing sound effects...]$RESET"
+        play_sound_effect "confirm"
+    fi
+}
+
+# Function to generate hash for static messages
+get_message_hash() {
+    local message="$1"
+    echo -n "$message" | md5sum | cut -d' ' -f1
+}
 
 # Function to show property change header
 show_property_change() {
@@ -47,6 +543,12 @@ chat_with_codedeck() {
     local message="$1"
     local response
     
+    # Reset interrupt flag
+    INTERRUPT_REQUESTED=false
+    
+    # Play send sound effect
+    play_sound_effect "send"
+    
     # Show user message in orange
     echo -e "$BRIGHT_ORANGE[You] $message$RESET"
     echo ""
@@ -61,6 +563,7 @@ chat_with_codedeck() {
         sleep 0.2
     done
     echo -e " ⟁]$RESET"
+    echo -e "$DIM_PURPLE[Press Ctrl+C to interrupt generation]$RESET"
     
     # Build messages array with system message and history
     local messages_json
@@ -74,29 +577,41 @@ chat_with_codedeck() {
     
     # Use a temporary file to capture the full content from streaming
     local temp_content=$(mktemp)
+    local in_think_tag=false
+    local current_think_content=""
+    local think_tag_type=""
     
-    curl -s -X POST "$CODEDECK_API/v1/chat/completions" \
+    # Start generation in background and capture PID
+    {
+        curl -s -X POST "$CODEDECK_API/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -H "X-Persona-ID: $GLADOS_PERSONA_ID" \
         -d "{
-            \"model\": \"$CURRENT_MODEL\",
-            \"messages\": $messages_json,
-            \"max_tokens\": 150,
+                \"model\": \"$CURRENT_MODEL\",
+                \"messages\": $messages_json,
+                \"max_tokens\": 8192,
             \"temperature\": 0.7,
-            \"stream\": true
-        }" 2>/dev/null | while IFS= read -r line; do
-            # Skip empty lines and non-data lines
-            if [[ "$line" =~ ^data:\ (.*)$ ]]; then
-                local json_data="${BASH_REMATCH[1]}"
-                
-                # Skip [DONE] marker
-                if [ "$json_data" = "[DONE]" ]; then
+                \"stream\": true
+            }" 2>/dev/null | while IFS= read -r line; do
+                # Check for interrupt
+                if [ "$INTERRUPT_REQUESTED" = true ]; then
                     break
                 fi
                 
-                # Parse each streaming chunk
-                local token
-                token=$(echo "$json_data" | python3 -c "
+                # Skip empty lines and non-data lines
+                if [[ "$line" =~ ^data:\ (.*)$ ]]; then
+                    local json_data="${BASH_REMATCH[1]}"
+                    
+                    # Skip [DONE] marker
+                    if [ "$json_data" = "[DONE]" ]; then
+                        # Play receive sound effect when response is complete
+                        play_sound_effect "receive"
+                        break
+                    fi
+                    
+                    # Parse each streaming chunk
+                    local token
+                    token=$(echo "$json_data" | python3 -c "
 import sys, json
 try:
     data = json.load(sys.stdin)
@@ -107,14 +622,74 @@ try:
 except:
     pass
 " 2>/dev/null)
-                
-                # Display token immediately and save to temp file
-                if [ -n "$token" ]; then
-                    echo -ne "$PURPLE$token$RESET"
-                    echo -n "$token" >> "$temp_content"
+                    
+                    # Process token with think-tag awareness
+                    if [ -n "$token" ]; then
+                        echo -n "$token" >> "$temp_content"
+                        
+                        # Simple think-tag processing - check the accumulated content
+                        local full_so_far
+                        full_so_far=$(cat "$temp_content" 2>/dev/null)
+                        
+                        # Count think tags to determine state
+                        local think_opens=$(echo "$full_so_far" | grep -o '<think>' | wc -l)
+                        local think_closes=$(echo "$full_so_far" | grep -o '</think>' | wc -l)
+                        
+                        # Are we inside a think tag?
+                        local inside_think=false
+                        if [ "$think_opens" -gt "$think_closes" ]; then
+                            inside_think=true
+                        fi
+                        
+                        # Handle think tag transitions
+                        if [[ "$token" == *"<think>"* ]]; then
+                            echo -ne "\n$DIM_PURPLE💭 [Internal Thinking]$RESET\n"
+                            # Print remaining content after <think> tag
+                            local after_tag=$(echo "$token" | sed 's/.*<think>//')
+                            if [ -n "$after_tag" ]; then
+                                echo -ne "\e[2;90m$after_tag\e[0m"
+                            fi
+                        elif [[ "$token" == *"</think>"* ]]; then
+                            # Print content before </think> tag
+                            local before_tag=$(echo "$token" | sed 's/<\/think>.*//')
+                            if [ -n "$before_tag" ]; then
+                                echo -ne "\e[2;90m$before_tag\e[0m"
+                            fi
+                            echo -ne "\n$PURPLE"
+                            # Print remaining content after </think> tag
+                            local after_tag=$(echo "$token" | sed 's/.*<\/think>//')
+                            if [ -n "$after_tag" ]; then
+                                echo -ne "$after_tag"
+                            fi
+                        elif [ "$inside_think" = true ]; then
+                            # Inside think tag - use very dim gray
+                            echo -ne "\e[2;90m$token\e[0m"
+                        else
+                            # Normal content - use regular purple
+                            echo -ne "\e[35m$token\e[0m"
+                        fi
+                    fi
                 fi
-            fi
-        done
+            done
+    } &
+    
+    # Capture the background process PID
+    GENERATION_PID=$!
+    
+    # Wait for generation to complete
+    wait "$GENERATION_PID" 2>/dev/null
+    local generation_exit_code=$?
+    
+    # Reset generation PID and ensure clean terminal state only if needed
+    GENERATION_PID=""
+    if [ "$generation_exit_code" -ne 0 ] || [ "$INTERRUPT_REQUESTED" = true ]; then
+        if [ "$IS_SSH_SESSION" = true ]; then
+            stty sane 2>/dev/null || true
+        else
+            stty echo 2>/dev/null || true
+            stty icanon 2>/dev/null || true
+        fi
+    fi
     
     echo  # New line after completion
     
@@ -125,14 +700,21 @@ except:
         rm -f "$temp_content"
     fi
     
-    # Add assistant response to history
-    if [ -n "$full_content" ]; then
+    # Only process if not interrupted
+    if [ "$INTERRUPT_REQUESTED" != true ] && [ -n "$full_content" ]; then
+        # Add assistant response to history
         MESSAGE_HISTORY+=("assistant:$full_content")
         
-        # If voice is enabled, use TTS to speak the response
+        # If voice is enabled, use TTS to speak the response (clean of think tags)
         if [ "$VOICE_ENABLED" = true ]; then
-            speak_response "$full_content"
+            speak_routine_message "response" "$full_content"
         fi
+    elif [ "$INTERRUPT_REQUESTED" = true ]; then
+        # Remove the user message from history since the exchange was interrupted
+        if [ ${#MESSAGE_HISTORY[@]} -gt 0 ]; then
+            unset 'MESSAGE_HISTORY[-1]'
+        fi
+        echo -e "$DIM_PURPLE[Generation stopped. You can continue the conversation normally.]$RESET"
     else
         echo -e "$RED🔧 Connection to CODEDECK core failed. Is the service running?$RESET"
         
@@ -332,16 +914,53 @@ print(content)
             echo -ne "."
             sleep 0.1
         done
-        echo -e " 🔊]$RESET"
+        echo -ne "]$RESET"
         
-        # Call TTS API
-        curl -s -X POST "$CODEDECK_API/v1/tts/speak" \
+        # Call TTS API with better error handling
+        local tts_response
+        local http_code
+        
+        # Create temporary files for response and error capture
+        local temp_response=$(mktemp)
+        local temp_error=$(mktemp)
+        
+        # Make the API call with verbose error reporting
+        http_code=$(curl -s -w "%{http_code}" -X POST "$CODEDECK_API/v1/tts/speak" \
             -H "Content-Type: application/json" \
             -d "{
                 \"text\": \"$clean_text\",
                 \"voice\": \"glados\",
                 \"speed\": 1.0
-            }" > /dev/null 2>&1
+            }" -o "$temp_response" 2>"$temp_error")
+        
+        # Check the response
+        if [ "$http_code" = "200" ]; then
+            # Check if response contains audio or error message
+            local response_content
+            response_content=$(head -c 100 "$temp_response" 2>/dev/null)
+            
+            if echo "$response_content" | grep -q "detail\|error\|html"; then
+                echo -e " ✗ (API error)$RESET"
+                echo -e "$DIM_PURPLE[TTS Error: $(cat "$temp_response" | head -c 200)]$RESET"
+            else
+                echo -e " ♪$RESET"
+            fi
+        elif [ "$http_code" = "000" ]; then
+            echo -e " ✗ (connection failed)$RESET"
+            echo -e "$DIM_PURPLE[Could not connect to TTS service at $CODEDECK_API]$RESET"
+        else
+            echo -e " ✗ (HTTP $http_code)$RESET"
+            local error_detail
+            error_detail=$(cat "$temp_response" 2>/dev/null | head -c 200)
+            if [ -n "$error_detail" ]; then
+                echo -e "$DIM_PURPLE[TTS Error: $error_detail]$RESET"
+            fi
+        fi
+        
+        # Clean up temp files
+        rm -f "$temp_response" "$temp_error"
+    else
+        echo -e "$DIM_PURPLE[🔊 No content to vocalize]$RESET"
     fi
 }
 
@@ -425,12 +1044,14 @@ switch_persona() {
 toggle_voice() {
     if [ "$VOICE_ENABLED" = true ]; then
         VOICE_ENABLED=false
+        play_sound_effect "confirm"
         show_property_change "Voice responses DISABLED" "Text only mode" "🔇"
     else
         VOICE_ENABLED=true
+        play_sound_effect "confirm"
         show_property_change "Voice responses ENABLED" "GLaDOS voice active" "🔊"
         echo -e "$DIM_PURPLE[Testing voice...]$RESET"
-        speak_response "Voice active."
+        speak_routine_message "voice_activated" "Voice active."
     fi
 }
 
@@ -452,19 +1073,21 @@ set_system_message() {
     
     if [ "$new_system_message" = "clear" ]; then
         SESSION_SYSTEM_MESSAGE=""
+        play_sound_effect "confirm"
         show_property_change "System message cleared" "Using persona default" "🧠"
         
         if [ "$VOICE_ENABLED" = true ]; then
-            speak_response "System directive cleared."
+            speak_routine_message "system_cleared" "System directive cleared."
         fi
         return
     fi
     
     SESSION_SYSTEM_MESSAGE="$new_system_message"
+    play_sound_effect "confirm"
     show_property_change "System message updated" "${new_system_message:0:50}..." "🧠"
     
     if [ "$VOICE_ENABLED" = true ]; then
-        speak_response "New system directive loaded."
+        speak_routine_message "system_updated" "New system directive loaded."
     fi
 }
 
@@ -484,20 +1107,22 @@ set_context_length() {
     fi
     
     CONTEXT_LENGTH="$new_length"
+    play_sound_effect "confirm"
     show_property_change "Context length updated" "$CONTEXT_LENGTH message pairs" "📚"
     
     if [ "$VOICE_ENABLED" = true ]; then
-        speak_response "Context memory updated to $new_length pairs."
+        speak_routine_message "context_updated_$new_length" "Context memory updated to $new_length pairs."
     fi
 }
 
 # Function to clear conversation history
 clear_context() {
     MESSAGE_HISTORY=()
+    play_sound_effect "confirm"
     show_property_change "Conversation context cleared" "Memory wiped" "🗑️"
     
     if [ "$VOICE_ENABLED" = true ]; then
-        speak_response "Memory wiped."
+        speak_routine_message "memory_wiped" "Memory wiped."
     fi
 }
 
@@ -597,10 +1222,11 @@ except:
             
             if [ "$success" = "true" ]; then
                 CURRENT_MODEL="$model_name"
+                play_sound_effect "switch"
                 show_property_change "Model switched" "$model_name" "🤖"
                 
                 if [ "$VOICE_ENABLED" = true ]; then
-                    speak_response "Neural model $model_name loaded."
+                    speak_routine_message "model_switched" "Neural model $model_name loaded."
                 fi
             else
                 echo -e "$RED[✗] Failed to load model '$model_name'$RESET"
@@ -623,14 +1249,20 @@ show_help() {
     echo "═══════════════════════════════════════════════════════════════"
     echo "                    CODEDECK CONSOLE COMMANDS"
     echo "═══════════════════════════════════════════════════════════════"
-    echo ""
     echo "🗨️  CHAT:"
     echo "   <message>        - Chat with current AI persona"
+    echo "   help/h/?         - Show this help message"
     echo ""
     echo "🔧 SYSTEM:"
-    echo "   help             - Show this help message"
     echo "   status           - Check CODEDECK service status"
+    echo "   battery          - Show battery status and check warnings"
     echo "   session          - Show current session status"
+    echo -e "$RESET"
+    echo -e "$YELLOW[Press any key to continue...]$RESET"
+    read -n 1 -s
+    
+    echo -e "$DIM_PURPLE"
+    echo "👤 PERSONAS & MODELS:"
     echo "   personas         - List available consciousness modules"
     echo "   switch <name>    - Switch AI persona (glados, coder, writer)"
     echo "   model            - List available models"
@@ -640,17 +1272,27 @@ show_help() {
     echo "   system <msg>     - Set system message for this session"
     echo "   system clear     - Remove current system message"
     echo "   system           - Show current system message"
+    echo -e "$RESET"
+    echo -e "$YELLOW[Press any key to continue...]$RESET"
+    read -n 1 -s
+    
+    echo -e "$DIM_PURPLE"
+    echo "📚 MEMORY:"
     echo "   context <num>    - Set context length (0-20 message pairs)"
     echo "   context          - Show current context length"
     echo "   clear            - Clear conversation history"
     echo ""
-    echo "🔊 VOICE:"
+    echo "🔊 AUDIO:"
     echo "   speak            - Toggle voice responses (text + audio)"
+    echo "   sound            - Toggle sound effects (UI feedback sounds)"
+    echo "   hear             - Record 10s of audio and convert to text input"
+    echo "   audio-diag       - Run comprehensive audio system diagnostics"
     echo ""
     echo "🎮 INTERFACE:"
     echo "   cls              - Clear the console display"
-    echo "   exit             - Exit the console"
-    echo ""
+    echo "   recover/fix      - Fix input issues / recover terminal state"
+    echo "   cache-purge      - Delete all cached voice clips (free space)"
+    echo "   exit/quit/q      - Exit the console"
     echo "═══════════════════════════════════════════════════════════════"
     echo -e "$RESET"
 }
@@ -659,20 +1301,233 @@ show_help() {
 init_console() {
     echo -e "$PURPLE"
     cat << "EOF"
-    ╔═══════════════════════════════════════════════════════════╗
+    ╔═══════════════════════════════════════════════════════╗
     ║                    CODEDECK CONSOLE                       ║
     ║                  Neural Chat Interface                    ║
-    ╚═══════════════════════════════════════════════════════════╝
+    ╚═══════════════════════════════════════════════════════╝
 EOF
     echo -e "$RESET"
     echo ""
     echo -e "$DIM_PURPLE𓁹 GLaDOS consciousness module loaded...$RESET"
+    
+    # Play startup sound
+    play_sound_effect "start"
+    
+    # Show battery status on startup
+    echo -ne "$DIM_PURPLE[Checking power status..."
+    sleep 0.1
+    echo -e "]$RESET"
+    show_battery_status
+    
     echo -e "$PURPLE[GLaDOS] Well, well, well. Look who's decided to interface with me directly.$RESET"
     echo -e "$DIM_PURPLE💡 Type 'help' for available commands$RESET"
     echo -e "$DIM_PURPLE🎨 Colors: $BRIGHT_ORANGE[Your messages]$DIM_PURPLE, $PURPLE[AI replies]$DIM_PURPLE, $CYAN[Think-tags with cool effects]$RESET"
-    echo -e "$DIM_PURPLE🔊 Voice: $RED[DISABLED]$DIM_PURPLE - Type 'speak' to enable audio responses$RESET"
+    
+    # Voice status
+    local voice_status="$RED[DISABLED]"
+    if [ "$VOICE_ENABLED" = true ]; then
+        voice_status="$GREEN[ENABLED]"
+    fi
+    
+    # Sound effects status
+    local sound_status="$GREEN[ENABLED]"
+    if [ "$SOUND_ENABLED" != true ]; then
+        sound_status="$RED[DISABLED]"
+    fi
+    
+    echo -e "$DIM_PURPLE🔊 Voice: $voice_status$DIM_PURPLE - Type 'speak' to toggle | 🎵 Sound: $sound_status$DIM_PURPLE - Type 'sound' to toggle$RESET"
     echo -e "$DIM_PURPLE📚 Context: $CONTEXT_LENGTH pairs | 🧠 System: ${SESSION_SYSTEM_MESSAGE:-"(default)"} | 🤖 Model: $CURRENT_MODEL$RESET"
     echo ""
+}
+
+# ── VOICE RECORDING FUNCTIONS ──
+
+# Function to run comprehensive audio diagnostics
+audio_diagnostics() {
+    echo -e "$DIM_PURPLE"
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "                   AUDIO SYSTEM DIAGNOSTICS"
+    echo "═══════════════════════════════════════════════════════════════"
+    echo -e "$RESET"
+    
+    # 1. Check basic audio tools
+    echo -e "$CYAN[1/8] Checking audio tools...$RESET"
+    local tools_ok=true
+    
+    if command -v arecord >/dev/null 2>&1; then
+        echo -e "$GREEN  ✓ arecord found: $(which arecord)$RESET"
+    else
+        echo -e "$RED  ✗ arecord not found$RESET"
+        tools_ok=false
+    fi
+    
+    if command -v aplay >/dev/null 2>&1; then
+        echo -e "$GREEN  ✓ aplay found: $(which aplay)$RESET"
+    else
+        echo -e "$RED  ✗ aplay not found$RESET"
+        tools_ok=false
+    fi
+    
+    if [ "$tools_ok" = false ]; then
+        echo -e "$YELLOW  💡 Install with: sudo apt install alsa-utils$RESET"
+        return 1
+    fi
+    
+    # 2. Check user permissions
+    echo -e "$CYAN[2/8] Checking user permissions...$RESET"
+    local audio_group=false
+    
+    if groups | grep -q audio 2>/dev/null; then
+        echo -e "$GREEN  ✓ User is in audio group$RESET"
+        audio_group=true
+    else
+        echo -e "$YELLOW  ⚠ User not in audio group$RESET"
+        echo -e "$DIM_PURPLE     Fix: sudo usermod -a -G audio $(whoami)$RESET"
+        echo -e "$DIM_PURPLE     Then logout/login$RESET"
+    fi
+    
+    # 3. Check /dev/snd permissions
+    echo -e "$CYAN[3/8] Checking device permissions...$RESET"
+    if [ -d /dev/snd ]; then
+        echo -e "$GREEN  ✓ /dev/snd directory exists$RESET"
+        local snd_perms=$(ls -la /dev/snd/ | head -5)
+        echo -e "$DIM_PURPLE  Device permissions:$RESET"
+        echo "$snd_perms" | while read line; do
+            echo -e "$DIM_PURPLE    $line$RESET"
+        done
+        
+        # Check if controlC* devices are accessible
+        local control_access=false
+        for ctrl in /dev/snd/controlC*; do
+            if [ -r "$ctrl" ] && [ -w "$ctrl" ]; then
+                control_access=true
+                break
+            fi
+        done
+        
+        if [ "$control_access" = true ]; then
+            echo -e "$GREEN  ✓ Audio control devices accessible$RESET"
+        else
+            echo -e "$YELLOW  ⚠ Audio control devices not accessible$RESET"
+            echo -e "$DIM_PURPLE     Fix: sudo chmod 666 /dev/snd/*$RESET"
+        fi
+    else
+        echo -e "$RED  ✗ /dev/snd directory not found$RESET"
+    fi
+    
+    # 4. List available recording devices
+    echo -e "$CYAN[4/8] Listing recording devices...$RESET"
+    local device_list
+    device_list=$(arecord -l 2>/dev/null)
+    
+    if [ -n "$device_list" ]; then
+        echo -e "$GREEN  ✓ Recording devices found:$RESET"
+        echo "$device_list" | while read line; do
+            if [[ "$line" =~ ^card.*device ]]; then
+                echo -e "$DIM_PURPLE    $line$RESET"
+            fi
+        done
+    else
+        echo -e "$RED  ✗ No recording devices found$RESET"
+        echo -e "$YELLOW  💡 Check microphone connection$RESET"
+        return 1
+    fi
+    
+    # 5. Test device access with different methods
+    echo -e "$CYAN[5/8] Testing device access...$RESET"
+    local test_devices=("default" "hw:0,0" "hw:1,0" "plughw:0,0" "plughw:1,0")
+    local working_devices=()
+    
+    for device in "${test_devices[@]}"; do
+        echo -ne "$DIM_PURPLE  Testing $device..."
+        
+        # Try to open device for 0.1 seconds
+        if timeout 2s arecord -D "$device" -f S16_LE -r 16000 -c 1 -d 0.1 /dev/null >/dev/null 2>&1; then
+            echo -e " ✓$RESET"
+            working_devices+=("$device")
+        else
+            echo -e " ✗$RESET"
+        fi
+    done
+    
+    if [ ${#working_devices[@]} -eq 0 ]; then
+        echo -e "$RED  ✗ No devices accessible for recording$RESET"
+        return 1
+    else
+        echo -e "$GREEN  ✓ Working devices: ${working_devices[*]}$RESET"
+    fi
+    
+    # 6. Test actual recording with best device
+    echo -e "$CYAN[6/8] Testing 2-second recording...$RESET"
+    local best_device="${working_devices[0]}"
+    local test_file="/tmp/audio_test_$(date +%s).wav"
+    
+    echo -e "$DIM_PURPLE  Recording 2 seconds with device: $best_device$RESET"
+    echo -e "$BRIGHT_ORANGE  [Speak now for 2 seconds...]$RESET"
+    
+    if arecord -D "$best_device" -f S16_LE -r 16000 -c 1 -d 2 "$test_file" >/dev/null 2>&1; then
+        if [ -f "$test_file" ] && [ -s "$test_file" ]; then
+            local file_size
+            file_size=$(stat -f%z "$test_file" 2>/dev/null || stat -c%s "$test_file" 2>/dev/null || echo 0)
+            echo -e "$GREEN  ✓ Recording successful: $file_size bytes$RESET"
+            
+            # 7. Test playback
+            echo -e "$CYAN[7/8] Testing playback...$RESET"
+            echo -e "$DIM_PURPLE  Playing back your recording...$RESET"
+            
+            if aplay "$test_file" >/dev/null 2>&1; then
+                echo -e "$GREEN  ✓ Playback successful$RESET"
+            else
+                echo -e "$YELLOW  ⚠ Playback failed (recording worked though)$RESET"
+            fi
+            
+            rm -f "$test_file"
+        else
+            echo -e "$RED  ✗ Recording file empty or missing$RESET"
+            rm -f "$test_file"
+            return 1
+        fi
+    else
+        echo -e "$RED  ✗ Recording failed$RESET"
+        rm -f "$test_file"
+        return 1
+    fi
+    
+    # 8. Test API connectivity
+    echo -e "$CYAN[8/8] Testing CodeDeck API connectivity...$RESET"
+    local api_status
+    api_status=$(curl -s --connect-timeout 5 "$CODEDECK_API/v1/status" 2>/dev/null)
+    
+    if [ $? -eq 0 ] && [ -n "$api_status" ]; then
+        echo -e "$GREEN  ✓ CodeDeck API accessible$RESET"
+        
+        # Check if transcription endpoint exists
+        local transcription_test
+        transcription_test=$(curl -s --connect-timeout 5 -I "$CODEDECK_API/v1/audio/transcriptions" 2>/dev/null | head -1)
+        
+        if echo "$transcription_test" | grep -q "200\|405\|400"; then
+            echo -e "$GREEN  ✓ Transcription endpoint accessible$RESET"
+        else
+            echo -e "$YELLOW  ⚠ Transcription endpoint may not be available$RESET"
+        fi
+    else
+        echo -e "$RED  ✗ CodeDeck API not accessible at $CODEDECK_API$RESET"
+        echo -e "$YELLOW  💡 Make sure CodeDeck service is running$RESET"
+    fi
+    
+    # Summary
+    echo ""
+    echo -e "$DIM_PURPLE═══════════════════════════════════════════════════════════════$RESET"
+    echo -e "$GREEN✓ AUDIO DIAGNOSTICS COMPLETE$RESET"
+    echo -e "$DIM_PURPLE═══════════════════════════════════════════════════════════════$RESET"
+    echo ""
+    echo -e "$BRIGHT_ORANGE🎤 Recommended device: $best_device$RESET"
+    
+    if [ "$audio_group" = false ]; then
+        echo -e "$YELLOW⚠ Action needed: Add user to audio group$RESET"
+    else
+        echo -e "$GREEN🎤 Audio system appears ready for voice input!$RESET"
+    fi
 }
 
 # ── MAIN CONSOLE LOOP ──
@@ -680,12 +1535,57 @@ EOF
 # Initialize the console
 init_console
 
+# Show session type for debugging
+if [ "$IS_SSH_SESSION" = true ]; then
+    echo -e "$DIM_PURPLE[SSH session detected - using SSH-optimized terminal handling]$RESET"
+else
+    echo -e "$DIM_PURPLE[Local session detected - using local-optimized terminal handling]$RESET"
+fi
+
+# Counter for battery check interval
+BATTERY_CHECK_COUNTER=0
+INPUT_ERROR_COUNT=0  # Track consecutive input errors
+
 # Main interactive loop
 while true; do
+    # Only recover terminal state if we've had recent input errors
+    # This removes the aggressive recovery that was causing issues
+    if [ $INPUT_ERROR_COUNT -gt 2 ]; then
+        echo -e "$YELLOW[!] Multiple input errors detected, attempting recovery...$RESET"
+        recover_terminal_state
+        INPUT_ERROR_COUNT=0
+    fi
+    
+    # Check battery every 10 interactions
+    if [ $((BATTERY_CHECK_COUNTER % 10)) -eq 0 ]; then
+        check_battery_warnings
+    fi
+    BATTERY_CHECK_COUNTER=$((BATTERY_CHECK_COUNTER + 1))
+    
     # Stylized prompt
     echo -ne "\e[1;35m╭─[CODEDECK]─[$(date +%H:%M:%S)]"
     echo -ne "\n╰─➤ \e[0m"
-    read -r user_input
+    
+    # Read input with improved error handling
+    user_input=""
+    if read -r user_input 2>/dev/null; then
+        # Successfully read input - reset error counter
+        INPUT_ERROR_COUNT=0
+    else
+        # Input failed
+        INPUT_ERROR_COUNT=$((INPUT_ERROR_COUNT + 1))
+        echo -e "\n$YELLOW[!] Input error $INPUT_ERROR_COUNT detected$RESET"
+        
+        if [ $INPUT_ERROR_COUNT -le 2 ]; then
+            echo -e "$DIM_PURPLE[Retrying input...]$RESET"
+            sleep 0.1
+            continue
+        else
+            echo -e "$RED[!] Multiple input failures - trying terminal recovery$RESET"
+            recover_terminal_state
+            continue
+        fi
+    fi
     
     # Handle empty input
     if [ -z "$user_input" ]; then
@@ -707,6 +1607,9 @@ while true; do
             ;;
         "status")
             check_status
+            ;;
+        "battery")
+            check_battery_command
             ;;
         "session")
             show_session_status
@@ -757,6 +1660,22 @@ while true; do
         "cls")
             clear
             init_console
+            ;;
+        "sound")
+            toggle_sound_effects
+            ;;
+        "recover"|"fix")
+            recover_terminal_state
+            INPUT_ERROR_COUNT=0
+            ;;
+        "hear")
+            hear_command
+            ;;
+        "cache-purge")
+            purge_cognitive_cache
+            ;;
+        "audio-diag")
+            audio_diagnostics
             ;;
         *)
             # Chat with current AI persona (user message display now handled in function)
