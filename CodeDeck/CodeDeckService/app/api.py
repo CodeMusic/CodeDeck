@@ -2,7 +2,7 @@
 API Routes - OpenAI-compatible endpoints for LLM inference
 """
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, Form, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Union, AsyncGenerator
@@ -806,6 +806,73 @@ def create_api_router() -> APIRouter:
                 "default": "glados"
             }
     
+    # Speech-to-Text Endpoints
+    
+    @router.post("/v1/audio/transcriptions")
+    async def transcribe_audio(file: UploadFile = File(...), model: str = Form("whisper")):
+        """Transcribe audio file to text using faster-whisper"""
+        try:
+            from faster_whisper import WhisperModel
+            
+            # Validate file
+            if not file.filename:
+                raise HTTPException(status_code=400, detail="No file provided")
+                
+            # Check file extension
+            allowed_extensions = ['.wav', '.mp3', '.m4a', '.ogg', '.flac']
+            file_ext = os.path.splitext(file.filename)[1].lower()
+            if file_ext not in allowed_extensions:
+                raise HTTPException(status_code=400, detail=f"Unsupported file type: {file_ext}")
+            
+            # Create temp file for uploaded audio
+            with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_audio:
+                content = await file.read()
+                temp_audio.write(content)
+                temp_audio_path = temp_audio.name
+            
+            try:
+                # Initialize WhisperModel (uses CPU by default for compatibility)
+                # You can change to "cuda" if you have GPU support
+                whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+                
+                # Transcribe audio
+                segments, info = whisper_model.transcribe(
+                    temp_audio_path,
+                    beam_size=5,
+                    language="en"  # You can make this configurable
+                )
+                
+                # Collect all text segments
+                transcription_text = ""
+                for segment in segments:
+                    transcription_text += segment.text
+                
+                # Clean up transcription
+                transcription_text = transcription_text.strip()
+                
+                # Return OpenAI-compatible response format
+                return {
+                    "text": transcription_text,
+                    "language": info.language,
+                    "duration": info.duration
+                }
+                
+            finally:
+                # Clean up temp file
+                try:
+                    os.unlink(temp_audio_path)
+                except:
+                    pass
+                    
+        except ImportError:
+            raise HTTPException(
+                status_code=500, 
+                detail="faster-whisper not installed. Run: pip install faster-whisper"
+            )
+        except Exception as e:
+            logger.error(f"Error in transcribe_audio: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
     return router
 
 

@@ -34,6 +34,7 @@ CURRENT_MODEL="$DEFAULT_MODEL"  # Currently selected model
 # ── BATTERY & CACHING ──
 LAST_BATTERY_WARNING=100  # Track last battery warning level
 SPEECH_CACHE_DIR="$HOME/.codedeck/speech_cache"  # Directory for cached speech files
+RECORDING_CACHE_DIR="$HOME/.codedeck/recording_cache"  # Directory for temporary recordings
 
 # ── INTERRUPT HANDLING ──
 GENERATION_PID=""  # Track the current generation process
@@ -104,6 +105,9 @@ recover_terminal_state() {
 
 # Create speech cache directory
 mkdir -p "$SPEECH_CACHE_DIR"
+
+# Create recording cache directory  
+mkdir -p "$RECORDING_CACHE_DIR"
 
 # ── BATTERY MONITORING FUNCTIONS ──
 
@@ -412,7 +416,10 @@ speak_routine_message() {
     
     # Generate new audio
     echo -ne "$DIM_PURPLE[🎤 ♪]$RESET"
-    local temp_audio="/tmp/codedeck_voice_$(date +%s)_$$.wav"
+    
+    # Ensure recording cache directory exists
+    mkdir -p "$RECORDING_CACHE_DIR" 2>/dev/null
+    local temp_audio="$RECORDING_CACHE_DIR/codedeck_voice_$(date +%s)_$$.wav"
     
     # Get audio from API
     if curl -s -X POST "$CODEDECK_API/v1/tts/speak" \
@@ -1528,6 +1535,123 @@ audio_diagnostics() {
     else
         echo -e "$GREEN🎤 Audio system appears ready for voice input!$RESET"
     fi
+}
+
+# Function to detect recording device (simplified version)
+detect_recording_device() {
+    # Find USB Audio device from arecord -l
+    local usb_device
+    usb_device=$(arecord -l 2>/dev/null | grep "USB Audio" | head -1 | grep -o "card [0-9]*" | grep -o "[0-9]*")
+    
+    if [ -n "$usb_device" ]; then
+        echo "plughw:${usb_device},0"
+        return 0
+    fi
+    
+    # Fallback to default
+    echo "default"
+    return 0
+}
+
+# Function to record voice and convert to text
+hear_command() {
+    echo -e "$DIM_PURPLE[🎤 Initializing voice input...]$RESET"
+    
+    # Quick device detection
+    local recording_device
+    recording_device=$(detect_recording_device)
+    
+    if [ $? -ne 0 ]; then
+        echo -e "$RED[✗] No working recording device found$RESET"
+        echo -e "$YELLOW💡 Run 'audio-diag' for detailed diagnostics$RESET"
+        return 1
+    fi
+    
+    echo -e "$GREEN[✓ Using device: $recording_device]$RESET"
+    
+    # Ensure recording cache directory exists and create temp file
+    mkdir -p "$RECORDING_CACHE_DIR" 2>/dev/null
+    local temp_audio="$RECORDING_CACHE_DIR/codedeck_recording_$(date +%s)_$$.wav"
+    
+    echo ""
+    echo -e "$GREEN[🔴 RECORDING - Speak clearly for 10 seconds!]$RESET"
+    echo ""
+    
+    # Start recording
+    arecord -D "$recording_device" -f S16_LE -r 16000 -c 1 -d 10 "$temp_audio" >/dev/null 2>&1 &
+    local record_pid=$!
+    
+    # Countdown
+    for i in {10..1}; do
+        printf "\r$BRIGHT_ORANGE[🎤 RECORDING: %2ds remaining]$RESET" "$i"
+        sleep 1
+    done
+    
+    wait "$record_pid" 2>/dev/null
+    local record_exit_code=$?
+    
+    printf "\r$DIM_PURPLE[🎤 Processing...]$RESET\n"
+    
+    # Validate recording
+    if [ "$record_exit_code" -ne 0 ] || [ ! -f "$temp_audio" ] || [ ! -s "$temp_audio" ]; then
+        echo -e "$RED[✗] Recording failed$RESET"
+        echo -e "$YELLOW💡 Run 'audio-diag' for troubleshooting$RESET"
+        rm -f "$temp_audio"
+        return 1
+    fi
+    
+    local file_size
+    file_size=$(stat -f%z "$temp_audio" 2>/dev/null || stat -c%s "$temp_audio" 2>/dev/null || echo 0)
+    
+    if [ "$file_size" -lt 1000 ]; then
+        echo -e "$RED[✗] Recording too small ($file_size bytes)$RESET"
+        echo -e "$YELLOW💡 Try speaking louder$RESET"
+        rm -f "$temp_audio"
+        return 1
+    fi
+    
+    echo -e "$GREEN[✓ Recording captured: ${file_size} bytes]$RESET"
+    
+    # Send to API
+    local temp_response="/tmp/codedeck_response_$(date +%s)_$$.json"
+    local http_code
+    
+    http_code=$(curl -s -w "%{http_code}" -X POST "$CODEDECK_API/v1/audio/transcriptions" \
+        -H "Content-Type: multipart/form-data" \
+        -F "file=@$temp_audio" \
+        -F "model=whisper" \
+        -o "$temp_response" 2>/dev/null)
+    
+    if [ "$http_code" = "200" ]; then
+        local transcription
+        transcription=$(cat "$temp_response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    if 'text' in data:
+        print(data['text'].strip())
+    elif 'transcription' in data:
+        print(data['transcription'].strip())
+    else:
+        print('')
+except:
+    print('')
+")
+        
+        if [ -n "$transcription" ]; then
+            echo -e "$GREEN[✓ Speech recognized]$RESET"
+            echo ""
+            play_sound_effect "confirm"
+            chat_with_codedeck "$transcription"
+            echo ""
+        else
+            echo -e "$YELLOW[!] No speech detected$RESET"
+        fi
+    else
+        echo -e "$RED[✗ API failed (HTTP $http_code)]$RESET"
+    fi
+    
+    rm -f "$temp_response" "$temp_audio"
 }
 
 # ── MAIN CONSOLE LOOP ──
