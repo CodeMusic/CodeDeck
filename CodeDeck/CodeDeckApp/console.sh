@@ -15,30 +15,918 @@ CYAN="\e[36m"
 BLUE="\e[34m"
 RESET="\e[0m"
 
+# ── SILICON-SPECIFIC COLORS ──
+SILICON_PURPLE="\e[1;95m"    # Bright magenta/purple for Silicon responses
+SILICON_DIM="\e[2;95m"       # Dim bright magenta for Silicon debug
+SILICON_GREEN="\e[1;92m"     # Bright green for Silicon success messages
+
+# ── DEBUG LOGGING ──
+debug_log() {
+    if [ "$DEBUG_ENABLED" = true ]; then
+        echo -e "$DIM_PURPLE[DEBUG: $*]$RESET" >&2
+    fi
+}
+
 # ── CONFIGURATION ──
-CODEDECK_API="http://localhost:8000"
+CODEDECK_API="http://codedeck.local:8000"
 GLADOS_PERSONA_ID="assistant-default"  # Default assistant persona
 DEFAULT_MODEL="deepseek_r1_distill_qwen_1_5b_q4_0"  # Current available model
 VOICE_ENABLED=false  # Toggle for voice responses
+STREAMING_SPEECH_ENABLED=false  # Toggle for real-time sentence-based speech streaming
+DEBUG_ENABLED=false  # Toggle for debug output
+
+# ── VIRTUAL ENVIRONMENT CONFIGURATION ──
+CODEDECK_VENV_PATH="/home/codemusic/CodeDeck/codedeck_venv"  # Path to CodeDeck virtual environment
+
+# ── VOICE MODELS CONFIGURATION ──
+VOICE_MODELS_DIR="$HOME/CodeDeck/voice_models"  # Directory containing Piper voice models
+DEFAULT_VOICE="en_US-GlaDOS-medium.onnx"  # Default voice model
+CURRENT_VOICE="$DEFAULT_VOICE"  # Currently selected voice model
+
+# ── SILICON PIPELINE CONFIGURATION ──
+ENABLE_SILICON_PIPELINE=true  # Toggle for remote Ollama endpoint monitoring
+SILICON_ENDPOINTS=(
+    "http://10.0.0.105:11434"
+    "http://10.0.0.151:11434"
+)  # List of remote Ollama endpoints (priority order)
+SILICON_PREFERRED_MODEL="deepseek-r1:latest"  # Preferred model on remote endpoints
+SILICON_CHECK_INTERVAL=30  # Seconds between endpoint health checks
+SILICON_TIMEOUT=30  # Connection timeout for endpoint checks (increased for busy endpoints)
+
+# ── SILICON PIPELINE STATE ──
+SILICON_ACTIVE_ENDPOINT=""  # Currently active remote endpoint
+SILICON_ACTIVE_MODEL=""  # Currently active remote model
+SILICON_LAST_CHECK=0  # Timestamp of last endpoint check
+SILICON_STATUS="disconnected"  # Current pipeline status: connected, disconnected, fallback
+SILICON_MONITOR_PID=""  # PID of background monitoring process
 
 # ── SOUND EFFECTS ──
 SOUND_EFFECTS_DIR="$(dirname "$0")/assets"  # Sound effects directory
 SOUND_ENABLED=true  # Toggle for sound effects
 
+MAX_SPEAK_CHUNK=40
+
 # ── SESSION STATE ──
 SESSION_SYSTEM_MESSAGE=""  # Current session system message
 MESSAGE_HISTORY=()  # Array to store conversation history
-CONTEXT_LENGTH=5  # Number of message pairs to include in context
+CONTEXT_LENGTH=4  # Number of message pairs to include in context
 CURRENT_MODEL="$DEFAULT_MODEL"  # Currently selected model
+CURRENT_TEMPERATURE=0.7  # AI creativity/spontaneity level (0.0-1.0)
 
 # ── BATTERY & CACHING ──
 LAST_BATTERY_WARNING=100  # Track last battery warning level
 SPEECH_CACHE_DIR="$HOME/.codedeck/speech_cache"  # Directory for cached speech files
 RECORDING_CACHE_DIR="$HOME/.codedeck/recording_cache"  # Directory for temporary recordings
 
+# ── STREAMING SPEECH SYSTEM ──
+STREAMING_SPEECH_DIR="$HOME/.codedeck/streaming_speech"  # Directory for streaming speech files
+SENTENCE_INDEX_COUNTER=0  # Global counter for sentence indexing
+EXPECTED_PLAYBACK_INDEX=1  # Next expected sentence index for playback
+PLAYBACK_QUEUE_FILE="$STREAMING_SPEECH_DIR/playback_queue"  # File to track playback queue
+SENTENCE_BUFFER=""  # Buffer for incomplete sentences during streaming
+PLAYBACK_COORDINATOR_PID=""  # PID of the playback coordinator process
+
 # ── INTERRUPT HANDLING ──
 GENERATION_PID=""  # Track the current generation process
 INTERRUPT_REQUESTED=false  # Flag for interrupt requests
+POST_INTERRUPT_AUDIO=false  # Flag for when we're in post-interrupt audio playback
+
+# ── SILICON PIPELINE FUNCTIONS ──
+
+# Function to check if an Ollama endpoint is alive
+check_silicon_endpoint() {
+    local endpoint="$1"
+    local timeout="${2:-$SILICON_TIMEOUT}"
+    
+    debug_log "Checking Silicon endpoint: $endpoint"
+    
+    # Quick health check on the /api/tags endpoint
+    local response
+    response=$(curl -s --connect-timeout "$timeout" --max-time "$timeout" "$endpoint/api/tags" 2>/dev/null)
+    
+    if [ $? -eq 0 ] && echo "$response" | grep -q "models" 2>/dev/null; then
+        debug_log "Silicon endpoint $endpoint is alive"
+        return 0
+    else
+        debug_log "Silicon endpoint $endpoint is unreachable"
+        return 1
+    fi
+}
+
+# Function to get available models from an Ollama endpoint
+get_silicon_models() {
+    local endpoint="$1"
+    
+    debug_log "Fetching models from Silicon endpoint: $endpoint"
+    
+    local response
+    response=$(curl -s --connect-timeout "$SILICON_TIMEOUT" --max-time "$SILICON_TIMEOUT" "$endpoint/api/tags" 2>/dev/null)
+    
+    if [ $? -eq 0 ] && [ -n "$response" ]; then
+        # Parse JSON to extract model names
+        echo "$response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    models = data.get('models', [])
+    for model in models:
+        print(model.get('name', ''))
+except:
+    pass
+" 2>/dev/null
+    fi
+}
+
+# Function to select best model from available models
+select_silicon_model() {
+    local endpoint="$1"
+    local models
+    models=$(get_silicon_models "$endpoint")
+    
+    if [ -z "$models" ]; then
+        debug_log "No models found on Silicon endpoint: $endpoint"
+        return 1
+    fi
+    
+    debug_log "Available models on $endpoint: $(echo "$models" | tr '\n' ' ')"
+    
+    # Check if preferred model exists
+    if echo "$models" | grep -q "^${SILICON_PREFERRED_MODEL}$"; then
+        echo "$SILICON_PREFERRED_MODEL"
+        debug_log "Found preferred model: $SILICON_PREFERRED_MODEL"
+        return 0
+    fi
+    
+    # Use first available model as fallback
+    local first_model
+    first_model=$(echo "$models" | head -1)
+    if [ -n "$first_model" ]; then
+        echo "$first_model"
+        debug_log "Using first available model: $first_model"
+        return 0
+    fi
+    
+    debug_log "No suitable models found on Silicon endpoint"
+    return 1
+}
+
+# Function to discover active Silicon endpoint
+discover_silicon_endpoint() {
+    if [ "$ENABLE_SILICON_PIPELINE" != true ]; then
+        return 1
+    fi
+    
+    debug_log "Discovering Silicon endpoints..."
+    
+    for endpoint in "${SILICON_ENDPOINTS[@]}"; do
+        if check_silicon_endpoint "$endpoint"; then
+            local model
+            model=$(select_silicon_model "$endpoint")
+            
+            if [ $? -eq 0 ] && [ -n "$model" ]; then
+                SILICON_ACTIVE_ENDPOINT="$endpoint"
+                SILICON_ACTIVE_MODEL="$model"
+                debug_log "Silicon pipeline connected: $endpoint with model $model"
+                return 0
+            fi
+        fi
+    done
+    
+    debug_log "No Silicon endpoints available"
+    return 1
+}
+
+# Function to announce Silicon pipeline status changes
+announce_silicon_status() {
+    local new_status="$1"
+    local old_status="$SILICON_STATUS"
+    
+    if [ "$new_status" = "$old_status" ]; then
+        return  # No change
+    fi
+    
+    SILICON_STATUS="$new_status"
+    
+    case "$new_status" in
+        "connected")
+            echo -e "$GREEN[🧠 Synaptic Influx Detected - Neural bandwidth enhanced]$RESET"
+            if [ "$VOICE_ENABLED" = true ]; then
+                speak_routine_message "silicon_connected" "Synaptic influx detected. Neural bandwidth enhanced."
+            fi
+            play_sound_effect "switch"
+            ;;
+        "disconnected"|"fallback")
+            # Check if local API is available to determine message
+            local local_available=false
+            if curl -s --connect-timeout 2 "$CODEDECK_API/v1/status" >/dev/null 2>&1; then
+                local_available=true
+            fi
+            
+            if [ "$local_available" = true ]; then
+                echo -e "$YELLOW[🧠 Synaptic Density has Normalized - Local processing active]$RESET"
+                if [ "$VOICE_ENABLED" = true ]; then
+                    speak_routine_message "silicon_disconnected" "Synaptic density has normalized. Local processing active."
+                fi
+            else
+                echo -e "$RED[🧠 Synaptic Density has Normalized - No remote AI available]$RESET"
+                if [ "$VOICE_ENABLED" = true ]; then
+                    speak_routine_message "silicon_disconnected_no_local" "Synaptic density has normalized. No Remote AI systems available."
+                fi
+            fi
+            play_sound_effect "confirm"
+            ;;
+    esac
+}
+
+# Function to start Silicon pipeline monitoring
+start_silicon_monitor() {
+    if [ "$ENABLE_SILICON_PIPELINE" != true ]; then
+        return
+    fi
+    
+    # Stop any existing monitor
+    stop_silicon_monitor
+    
+    debug_log "Starting Silicon pipeline monitor"
+    
+    # Initial discovery
+    if discover_silicon_endpoint; then
+        announce_silicon_status "connected"
+    else
+        announce_silicon_status "disconnected"
+    fi
+    
+    # Start background monitoring process
+    {
+        while [ "$ENABLE_SILICON_PIPELINE" = true ]; do
+            sleep "$SILICON_CHECK_INTERVAL"
+            
+            local current_time
+            current_time=$(date +%s)
+            
+            # Skip if we just checked recently (avoid excessive checking)
+            if [ $((current_time - SILICON_LAST_CHECK)) -lt "$SILICON_CHECK_INTERVAL" ]; then
+                continue
+            fi
+            
+            SILICON_LAST_CHECK="$current_time"
+            
+            # Check current endpoint if we have one
+            if [ -n "$SILICON_ACTIVE_ENDPOINT" ]; then
+                # Try multiple times before marking as failed (endpoint might be busy)
+                local check_attempts=0
+                local max_attempts=3
+                local endpoint_failed=true
+                
+                while [ $check_attempts -lt $max_attempts ]; do
+                    if check_silicon_endpoint "$SILICON_ACTIVE_ENDPOINT"; then
+                        endpoint_failed=false
+                        break
+                    fi
+                    check_attempts=$((check_attempts + 1))
+                    debug_log "Silicon endpoint check attempt $check_attempts/$max_attempts failed"
+                    if [ $check_attempts -lt $max_attempts ]; then
+                        sleep 5  # Wait before retry
+                    fi
+                done
+                
+                if [ "$endpoint_failed" = true ]; then
+                    debug_log "Silicon endpoint $SILICON_ACTIVE_ENDPOINT went offline after $max_attempts attempts"
+                    SILICON_ACTIVE_ENDPOINT=""
+                    SILICON_ACTIVE_MODEL=""
+                    announce_silicon_status "fallback"
+                fi
+            fi
+            
+            # If no active endpoint, try to discover one
+            if [ -z "$SILICON_ACTIVE_ENDPOINT" ]; then
+                if discover_silicon_endpoint; then
+                    announce_silicon_status "connected"
+                fi
+            fi
+        done
+    } &
+    
+    SILICON_MONITOR_PID=$!
+    debug_log "Silicon monitor started with PID: $SILICON_MONITOR_PID"
+}
+
+# Function to stop Silicon pipeline monitoring
+stop_silicon_monitor() {
+    if [ -n "$SILICON_MONITOR_PID" ]; then
+        debug_log "Stopping Silicon monitor PID: $SILICON_MONITOR_PID"
+        kill "$SILICON_MONITOR_PID" 2>/dev/null || true
+        wait "$SILICON_MONITOR_PID" 2>/dev/null || true
+        SILICON_MONITOR_PID=""
+    fi
+}
+
+# Function to route chat request through Silicon pipeline with streaming
+route_silicon_chat_streaming() {
+    local messages_json="$1"
+    local output_file="$2"
+    
+    if [ "$ENABLE_SILICON_PIPELINE" != true ] || [ -z "$SILICON_ACTIVE_ENDPOINT" ] || [ -z "$SILICON_ACTIVE_MODEL" ]; then
+        return 1  # Use local routing
+    fi
+    
+    debug_log "Routing chat through Silicon endpoint: $SILICON_ACTIVE_ENDPOINT with model: $SILICON_ACTIVE_MODEL"
+    
+    # Convert CodeDeck format to Ollama format
+    local ollama_request
+    ollama_request=$(echo "$messages_json" | python3 -c "
+import sys, json
+try:
+    messages = json.load(sys.stdin)
+    
+    # Convert to Ollama chat format
+    ollama_format = {
+        'model': '$SILICON_ACTIVE_MODEL',
+        'messages': messages,
+        'stream': True,
+        'options': {
+            'temperature': $CURRENT_TEMPERATURE
+        }
+    }
+    
+    print(json.dumps(ollama_format))
+except Exception as e:
+    print('{}', file=sys.stderr)
+    exit(1)
+")
+    
+    if [ $? -ne 0 ]; then
+        debug_log "Failed to convert request format for Silicon pipeline"
+        return 1
+    fi
+    
+    # Track streaming variables
+    local full_content=""
+    local in_think_tag=false
+    local think_opens=0
+    local think_closes=0
+    local orphaned_close_handled=false
+    
+    # Make streaming request to Ollama endpoint
+    curl -s -X POST "$SILICON_ACTIVE_ENDPOINT/api/chat" \
+        -H "Content-Type: application/json" \
+        -d "$ollama_request" 2>/dev/null | while IFS= read -r line; do
+        
+        # Check for interrupt
+        if [ "$INTERRUPT_REQUESTED" = true ]; then
+            exit 1
+        fi
+        
+        if [ -n "$line" ]; then
+            # Parse Ollama response format
+            local content
+            content=$(echo "$line" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    message = data.get('message', {})
+    content = message.get('content', '')
+    if content:
+        print(content, end='')
+except:
+    pass
+" 2>/dev/null)
+            
+            if [ -n "$content" ]; then
+                # Add to full content
+                full_content="$full_content$content"
+                echo -n "$content" >> "$output_file"
+                
+                # Enhanced think-tag processing (simplified version)
+                think_opens=$(echo "$full_content" | grep -o '<think>' | wc -l)
+                think_closes=$(echo "$full_content" | grep -o '</think>' | wc -l)
+                
+                                        # Handle orphaned closing tag
+                        if [ "$think_closes" -gt "$think_opens" ] && [ "$orphaned_close_handled" = false ]; then
+                            orphaned_close_handled=true
+                            echo -ne "\n$SILICON_DIM┌─ 💭 [SILICON THINK - FROM START] ─┐$RESET\n"
+                            echo -ne "$SILICON_DIM│$RESET "
+                            local before_close=$(echo "$full_content" | sed 's/<\/think>.*//')
+                            if [ -n "$before_close" ]; then
+                                echo -ne "\e[3;96m$before_close\e[0m"
+                            fi
+                        fi
+                
+                # Determine if we're inside think tag
+                local inside_think=false
+                if [ "$think_opens" -gt "$think_closes" ]; then
+                    inside_think=true
+                fi
+                
+                # Process think-tag transitions
+                if [[ "$content" == *"<think>"* ]]; then
+                    if [ "$orphaned_close_handled" = false ]; then
+                        echo -ne "\n$SILICON_DIM┌─ 💭 [SILICON COGNITIVE PROCESSING] ─┐$RESET\n"
+                        echo -ne "$SILICON_DIM│$RESET "
+                    fi
+                    local after_tag=$(echo "$content" | sed 's/.*<think>//')
+                    if [ -n "$after_tag" ]; then
+                        echo -ne "\e[3;96m$after_tag\e[0m"
+                    fi
+                elif [[ "$content" == *"</think>"* ]]; then
+                    if [ "$orphaned_close_handled" = false ]; then
+                        local before_tag=$(echo "$content" | sed 's/<\/think>.*//')
+                        if [ -n "$before_tag" ]; then
+                            echo -ne "\e[3;96m$before_tag\e[0m"
+                        fi
+                        echo -ne "\n$SILICON_DIM└────────────────────────────────────────┘$RESET\n"
+                        echo -ne "$SILICON_PURPLE"
+                    else
+                        echo -ne "\n$SILICON_DIM└────────────────────────────────────────┘$RESET\n"
+                        echo -ne "$SILICON_PURPLE"
+                    fi
+                    local after_tag=$(echo "$content" | sed 's/.*<\/think>//')
+                    if [ -n "$after_tag" ]; then
+                        echo -ne "$after_tag"
+                        process_streaming_text_for_speech "$after_tag" false
+                    fi
+                elif [ "$inside_think" = true ]; then
+                    echo -ne "\e[3;96m$content\e[0m"
+                else
+                    echo -ne "$SILICON_PURPLE$content$RESET"
+                    process_streaming_text_for_speech "$content" false
+                fi
+            fi
+            
+            # Check if done
+            local done
+            done=$(echo "$line" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    print(data.get('done', False))
+except:
+    print(False)
+" 2>/dev/null)
+            
+            if [ "$done" = "True" ]; then
+                break
+            fi
+        fi
+    done
+    
+    # Check if we got a response
+    if [ -f "$output_file" ] && [ -s "$output_file" ]; then
+        return 0
+    else
+        # Check if this was due to user interrupt vs actual failure
+        if [ "$INTERRUPT_REQUESTED" = true ]; then
+            debug_log "Silicon request interrupted by user - endpoint still active"
+            return 1  # Return failure for routing but don't mark Silicon as failed
+        else
+            debug_log "Silicon endpoint request failed, marking for fallback"
+            # Mark endpoint as failed for background monitor to detect
+            SILICON_ACTIVE_ENDPOINT=""
+            SILICON_ACTIVE_MODEL=""
+            announce_silicon_status "fallback"
+            return 1
+        fi
+    fi
+}
+
+# Function to toggle Silicon pipeline
+toggle_silicon_pipeline() {
+    if [ "$ENABLE_SILICON_PIPELINE" = true ]; then
+        ENABLE_SILICON_PIPELINE=false
+        stop_silicon_monitor
+        SILICON_ACTIVE_ENDPOINT=""
+        SILICON_ACTIVE_MODEL=""
+        SILICON_STATUS="disconnected"
+        show_property_change "Silicon Pipeline DISABLED" "Local processing only" "🧠"
+        play_sound_effect "confirm"
+    else
+        ENABLE_SILICON_PIPELINE=true
+        show_property_change "Silicon Pipeline ENABLED" "Remote neural mesh monitoring" "🧠"
+        play_sound_effect "confirm"
+        start_silicon_monitor
+    fi
+}
+
+# Function to discover and show Silicon endpoint summary
+discover_silicon_endpoints_summary() {
+    echo -e "$GREEN🧠 Scanning Silicon Pipeline endpoints...$RESET"
+    
+    local endpoint_status=()
+    local endpoint_model_counts=()
+    local total_models=0
+    local available_endpoints=0
+    
+    # Check all configured endpoints
+    for endpoint in "${SILICON_ENDPOINTS[@]}"; do
+        echo -e "$DIM_PURPLE[Checking $endpoint...]$RESET"
+        
+        if check_silicon_endpoint "$endpoint"; then
+            local models
+            models=$(get_silicon_models "$endpoint")
+            local model_count=0
+            
+            if [ -n "$models" ]; then
+                model_count=$(echo "$models" | wc -l)
+                total_models=$((total_models + model_count))
+                available_endpoints=$((available_endpoints + 1))
+                
+                echo -e "$GREEN  ✓ $endpoint - $model_count models$RESET"
+                endpoint_status+=("available")
+                endpoint_model_counts+=("$model_count")
+            else
+                echo -e "$YELLOW  ⚠ $endpoint - Connected but no models$RESET"
+                endpoint_status+=("no_models")
+                endpoint_model_counts+=("0")
+            fi
+        else
+            echo -e "$RED  ✗ $endpoint - Cannot connect$RESET"
+            endpoint_status+=("offline")
+            endpoint_model_counts+=("0")
+        fi
+    done
+    
+    echo ""
+    echo -e "$GREEN✓ Silicon Summary: $available_endpoints/${#SILICON_ENDPOINTS[@]} endpoints available, $total_models total models$RESET"
+    
+    if [ $available_endpoints -gt 1 ]; then
+        echo -e "$CYAN💡 Multiple endpoints found! Use 'silicon endpoints' to choose priority$RESET"
+    fi
+    
+    return $available_endpoints
+}
+
+# Function to list models from Silicon endpoints
+list_silicon_models() {
+    # First show endpoint summary
+    discover_silicon_endpoints_summary
+    local available_count=$?
+    
+    if [ $available_count -eq 0 ]; then
+        echo -e "$YELLOW  ⚠ No models found on Silicon endpoints$RESET"
+        return 1
+    fi
+    
+    echo ""
+    echo -e "$CYAN🤖 Available Silicon Models:$RESET"
+    
+    # Collect all models from all endpoints for pagination
+    local temp_models=$(mktemp)
+    local all_models=()
+    local model_sources=()
+    local model_index=1
+    local total_models=0
+    
+    # Build a list of all models for pagination
+    for endpoint in "${SILICON_ENDPOINTS[@]}"; do
+        if check_silicon_endpoint "$endpoint"; then
+            local models
+            models=$(get_silicon_models "$endpoint")
+            
+            if [ -n "$models" ]; then
+                local priority_marker=""
+                if [ "$endpoint" = "$SILICON_ACTIVE_ENDPOINT" ]; then
+                    priority_marker=" [PRIORITY]"
+                fi
+                
+                # Add endpoint header to temp file
+                echo "ENDPOINT|$endpoint$priority_marker" >> "$temp_models"
+                
+                # Add models from this endpoint
+                while IFS= read -r model; do
+                    if [ -n "$model" ]; then
+                        all_models+=("$model")
+                        model_sources+=("$endpoint")
+                        
+                        # Mark current model if it matches
+                        local current_marker=""
+                        if [ "$model" = "$SILICON_ACTIVE_MODEL" ] && [ "$endpoint" = "$SILICON_ACTIVE_ENDPOINT" ]; then
+                            current_marker=" <- CURRENT"
+                        fi
+                        
+                        echo "MODEL|$model_index|$model|$endpoint|$current_marker" >> "$temp_models"
+                        model_index=$((model_index + 1))
+                        total_models=$((total_models + 1))
+                    fi
+                done <<< "$models"
+                
+                # Add separator
+                echo "SEPARATOR|" >> "$temp_models"
+            fi
+        fi
+    done
+    
+    if [ "$total_models" -eq 0 ]; then
+        echo -e "$YELLOW  ⚠ No models found on Silicon endpoints$RESET"
+        rm -f "$temp_models"
+        return 1
+    fi
+    
+    # Paginate the output (show 10 models at a time)
+    local models_per_page=10
+    local current_line=1
+    local total_lines
+    total_lines=$(wc -l < "$temp_models")
+    
+    echo -e "$SILICON_GREEN✓ Found $total_models Silicon models:$RESET"
+    echo ""
+    
+    while [ "$current_line" -le "$total_lines" ]; do
+        # Show next batch
+        local end_line=$((current_line + models_per_page - 1))
+        if [ "$end_line" -gt "$total_lines" ]; then
+            end_line="$total_lines"
+        fi
+        
+        # Display this batch
+        sed -n "${current_line},${end_line}p" "$temp_models" | while IFS='|' read -r type field1 field2 field3 field4; do
+            case "$type" in
+                "ENDPOINT")
+                    echo -e "$SILICON_GREEN📡 $field1:$RESET"
+                    ;;
+                "MODEL")
+                    echo -e "$SILICON_PURPLE  $field1. 🔥 $field2$field4$RESET"
+                    ;;
+                "SEPARATOR")
+                    echo ""
+                    ;;
+            esac
+        done
+        
+        current_line=$((end_line + 1))
+        
+        # Show pagination controls if there are more models
+        if [ "$current_line" -le "$total_lines" ]; then
+            echo -e "$YELLOW[Press any key to see more Silicon models...]$RESET"
+            read -n 1 -s
+            echo ""
+        fi
+    done
+    
+    echo -e "$SILICON_DIM┌─────────────────────────────────────────────────────┐$RESET"
+    echo -e "$SILICON_DIM│ SILICON MODEL USAGE:$RESET"
+    echo -e "$SILICON_DIM│   model select 1              - Select model #1$RESET"
+    echo -e "$SILICON_DIM│   model select deepseek_r1    - Select by name$RESET"
+    echo -e "$SILICON_DIM│   silicon endpoints           - Choose priority endpoint$RESET"
+    echo -e "$SILICON_DIM└─────────────────────────────────────────────────────┘$RESET"
+    
+    # Clean up temp file
+    rm -f "$temp_models"
+}
+
+# Function to select model from Silicon endpoints
+select_silicon_model_by_name_or_index() {
+    local selection="$1"
+    
+    # Build arrays of all available models and their sources
+    local all_models=()
+    local model_sources=()
+    
+    for endpoint in "${SILICON_ENDPOINTS[@]}"; do
+        if check_silicon_endpoint "$endpoint"; then
+            local models
+            models=$(get_silicon_models "$endpoint")
+            
+            while IFS= read -r model; do
+                if [ -n "$model" ]; then
+                    all_models+=("$model")
+                    model_sources+=("$endpoint")
+                fi
+            done <<< "$models"
+        fi
+    done
+    
+    if [ ${#all_models[@]} -eq 0 ]; then
+        echo -e "$RED❌ No models available on Silicon endpoints$RESET"
+        return 1
+    fi
+    
+    local target_model=""
+    local target_endpoint=""
+    
+    # Check if selection is a number (index)
+    if [[ "$selection" =~ ^[0-9]+$ ]]; then
+        local index=$((selection - 1))  # Convert to 0-based
+        
+        if [ $index -ge 0 ] && [ $index -lt ${#all_models[@]} ]; then
+            target_model="${all_models[$index]}"
+            target_endpoint="${model_sources[$index]}"
+            echo -e "$GREEN[✓ Model #$selection resolved to: $target_model on $target_endpoint]$RESET"
+        else
+            echo -e "$RED❌ Invalid model index: $selection (valid range: 1-${#all_models[@]})$RESET"
+            return 1
+        fi
+    else
+        # Selection by name - find first endpoint that has this model
+        for i in "${!all_models[@]}"; do
+            if [ "${all_models[$i]}" = "$selection" ]; then
+                target_model="$selection"
+                target_endpoint="${model_sources[$i]}"
+                echo -e "$GREEN[✓ Found model '$selection' on $target_endpoint]$RESET"
+                break
+            fi
+        done
+        
+        if [ -z "$target_model" ]; then
+            echo -e "$RED❌ Model '$selection' not found on any Silicon endpoint$RESET"
+            echo -e "$YELLOW💡 Use 'model list' to see available models$RESET"
+            return 1
+        fi
+    fi
+    
+    # Switch to the selected model and endpoint
+    SILICON_ACTIVE_ENDPOINT="$target_endpoint"
+    SILICON_ACTIVE_MODEL="$target_model"
+    CURRENT_MODEL="$target_model"
+    
+    # Update status
+    announce_silicon_status "connected"
+    
+    play_sound_effect "switch"
+    show_property_change "Silicon model switched" "$target_model @ ${target_endpoint##*/}" "🧠"
+    
+    if [ "$VOICE_ENABLED" = true ]; then
+        speak_routine_message "silicon_model_switched" "Silicon model $target_model loaded."
+    fi
+    
+    return 0
+}
+
+# Function to select priority Silicon endpoint
+select_silicon_endpoint() {
+    echo -e "$GREEN🧠 Silicon Endpoint Selection$RESET"
+    echo ""
+    
+    # Discover all endpoints with their status
+    local endpoint_list=()
+    local endpoint_status=()
+    local endpoint_model_counts=()
+    local available_count=0
+    
+    local index=1
+    for endpoint in "${SILICON_ENDPOINTS[@]}"; do
+        echo -e "$DIM_PURPLE[$index] Checking $endpoint...$RESET"
+        
+        if check_silicon_endpoint "$endpoint"; then
+            local models
+            models=$(get_silicon_models "$endpoint")
+            local model_count=0
+            
+            if [ -n "$models" ]; then
+                model_count=$(echo "$models" | wc -l)
+                available_count=$((available_count + 1))
+                
+                local current_marker=""
+                if [ "$endpoint" = "$SILICON_ACTIVE_ENDPOINT" ]; then
+                    current_marker=" [CURRENT PRIORITY]"
+                fi
+                
+                echo -e "$GREEN    ✓ $endpoint - $model_count models$current_marker$RESET"
+                endpoint_status+=("available")
+                endpoint_model_counts+=("$model_count")
+            else
+                echo -e "$YELLOW    ⚠ $endpoint - Connected but no models$RESET"
+                endpoint_status+=("no_models")
+                endpoint_model_counts+=("0")
+            fi
+        else
+            echo -e "$RED    ✗ $endpoint - Cannot connect$RESET"
+            endpoint_status+=("offline")
+            endpoint_model_counts+=("0")
+        fi
+        
+        endpoint_list+=("$endpoint")
+        index=$((index + 1))
+    done
+    
+    echo ""
+    
+    if [ $available_count -eq 0 ]; then
+        echo -e "$RED❌ No Silicon endpoints are currently available$RESET"
+        return 1
+    fi
+    
+    if [ $available_count -eq 1 ]; then
+        echo -e "$YELLOW💡 Only one endpoint available - no selection needed$RESET"
+        return 0
+    fi
+    
+    # Show selection menu
+    echo -e "$CYAN📋 Select priority endpoint:$RESET"
+    echo ""
+    
+    index=1
+    for endpoint in "${SILICON_ENDPOINTS[@]}"; do
+        local status="${endpoint_status[$((index-1))]}"
+        local count="${endpoint_model_counts[$((index-1))]}"
+        
+        case "$status" in
+            "available")
+                local current_marker=""
+                if [ "$endpoint" = "$SILICON_ACTIVE_ENDPOINT" ]; then
+                    current_marker=" [CURRENT]"
+                fi
+                echo -e "$GREEN  $index. ✓ $endpoint ($count models)$current_marker$RESET"
+                ;;
+            "no_models")
+                echo -e "$YELLOW  $index. ⚠ $endpoint (no models)$RESET"
+                ;;
+            "offline")
+                echo -e "$DIM_PURPLE  $index. ✗ $endpoint (offline)$RESET"
+                ;;
+        esac
+        index=$((index + 1))
+    done
+    
+    echo ""
+    echo -ne "$CYAN Enter selection (1-${#SILICON_ENDPOINTS[@]}) or 'q' to cancel: $RESET"
+    
+    local selection=""
+    read -r selection
+    
+    if [ "$selection" = "q" ] || [ "$selection" = "Q" ]; then
+        echo -e "$YELLOW[Cancelled]$RESET"
+        return 0
+    fi
+    
+    # Validate selection
+    if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -lt 1 ] || [ "$selection" -gt ${#SILICON_ENDPOINTS[@]} ]; then
+        echo -e "$RED❌ Invalid selection$RESET"
+        return 1
+    fi
+    
+    local selected_endpoint="${SILICON_ENDPOINTS[$((selection-1))]}"
+    local selected_status="${endpoint_status[$((selection-1))]}"
+    
+    if [ "$selected_status" != "available" ]; then
+        echo -e "$RED❌ Selected endpoint is not available$RESET"
+        return 1
+    fi
+    
+    # Set as priority endpoint
+    SILICON_ACTIVE_ENDPOINT="$selected_endpoint"
+    local best_model
+    best_model=$(select_silicon_model "$selected_endpoint")
+    
+    if [ $? -eq 0 ] && [ -n "$best_model" ]; then
+        SILICON_ACTIVE_MODEL="$best_model"
+        announce_silicon_status "connected"
+        
+        play_sound_effect "switch"
+        show_property_change "Silicon priority endpoint set" "$selected_endpoint (${best_model})" "🧠"
+        
+        if [ "$VOICE_ENABLED" = true ]; then
+            speak_routine_message "silicon_endpoint_selected" "Priority endpoint switched to ${selected_endpoint##*/}."
+        fi
+        
+        echo -e "$GREEN✓ Priority endpoint set to: $selected_endpoint$RESET"
+        echo -e "$GREEN✓ Using model: $best_model$RESET"
+    else
+        echo -e "$RED❌ Failed to initialize selected endpoint$RESET"
+        return 1
+    fi
+}
+
+# Function to show Silicon pipeline status
+show_silicon_status() {
+    echo -e "$DIM_PURPLE┌─── SILICON PIPELINE STATUS ───┐$RESET"
+    
+    if [ "$ENABLE_SILICON_PIPELINE" = true ]; then
+        echo -e "$GREEN🧠$RESET Pipeline: ENABLED"
+        echo -e "$GREEN🔗$RESET Status: $SILICON_STATUS"
+        
+        if [ -n "$SILICON_ACTIVE_ENDPOINT" ]; then
+            echo -e "$GREEN🌐$RESET Endpoint: $SILICON_ACTIVE_ENDPOINT"
+            echo -e "$GREEN🤖$RESET Model: $SILICON_ACTIVE_MODEL"
+        else
+            echo -e "$YELLOW🌐$RESET Endpoint: (discovering...)"
+            echo -e "$YELLOW🤖$RESET Model: (none)"
+        fi
+        
+        echo -e "$GREEN⏱️$RESET Check Interval: ${SILICON_CHECK_INTERVAL}s"
+        echo -e "$GREEN📡$RESET Configured Endpoints: ${#SILICON_ENDPOINTS[@]}"
+        
+        local i=1
+        for endpoint in "${SILICON_ENDPOINTS[@]}"; do
+            local status_icon="❓"
+            if [ "$endpoint" = "$SILICON_ACTIVE_ENDPOINT" ]; then
+                status_icon="🟢"
+            else
+                if check_silicon_endpoint "$endpoint" 1; then  # Quick 1-second check
+                    status_icon="⚪"
+                else
+                    status_icon="🔴"
+                fi
+            fi
+            echo -e "$DIM_PURPLE     $i. $status_icon $endpoint$RESET"
+            i=$((i + 1))
+        done
+    else
+        echo -e "$RED🧠$RESET Pipeline: DISABLED"
+        echo -e "$DIM_PURPLE     Use 'silicon' to enable remote neural mesh$RESET"
+    fi
+    
+    echo -e "$DIM_PURPLE└─────────────────────────────────┘$RESET"
+}
 
 # ── TERMINAL DETECTION ──
 # Detect if we're running over SSH or locally
@@ -47,13 +935,32 @@ if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ] || [ -n "$SSH_CONNECTION" ]; then
     IS_SSH_SESSION=true
 fi
 
+source /home/codemusic/CodeDeck/codedeck_venv/bin/activate
+
 # Function to handle interrupt signals
 handle_interrupt() {
+    # Check if we're already in post-interrupt audio state
+    if [ "$POST_INTERRUPT_AUDIO" = true ]; then
+        # Second interrupt - hush everything immediately
+        echo -e "\n$RED[🤫 Double interrupt - hushing all audio]$RESET"
+        hush
+        POST_INTERRUPT_AUDIO=false
+        INTERRUPT_REQUESTED=false
+        return
+    fi
+    
+    # First interrupt during generation
     INTERRUPT_REQUESTED=true
     if [ -n "$GENERATION_PID" ]; then
         kill -TERM "$GENERATION_PID" 2>/dev/null
     fi
-    echo -e "\n$YELLOW[⚠] Generation interrupted by user$RESET"
+    echo -e "\n$YELLOW[⚠] Generation interrupted - partial audio will play (Ctrl+C again to hush)$RESET"
+    
+    # Set flag to indicate we're now in post-interrupt audio state
+    POST_INTERRUPT_AUDIO=true
+    
+    # DON'T kill audio processes on first interrupt - let partial audio play
+    debug_log "Generation stopped, allowing partial audio to continue"
     
     # Only reset terminal state if needed, and do it gently
     if [ "$IS_SSH_SESSION" = true ]; then
@@ -92,8 +999,9 @@ recover_terminal_state() {
         done
     fi
     
-    # Reset interrupt flag
+    # Reset interrupt flags
     INTERRUPT_REQUESTED=false
+    POST_INTERRUPT_AUDIO=false
     
     # Clear generation PID
     GENERATION_PID=""
@@ -109,7 +1017,176 @@ mkdir -p "$SPEECH_CACHE_DIR"
 # Create recording cache directory  
 mkdir -p "$RECORDING_CACHE_DIR"
 
-# ── BATTERY MONITORING FUNCTIONS ──
+# Create streaming speech directory
+mkdir -p "$STREAMING_SPEECH_DIR"
+
+# ── SYSTEM MONITORING FUNCTIONS ──
+
+# Function to get CPU temperature
+get_cpu_temperature() {
+    local cpu_temp=""
+    
+    # Try different methods based on the system
+    if [ -f /sys/class/thermal/thermal_zone0/temp ]; then
+        # Linux - most common location (in millidegrees)
+        local temp_millidegrees=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
+        if [ -n "$temp_millidegrees" ] && [ "$temp_millidegrees" -gt 0 ]; then
+            cpu_temp=$((temp_millidegrees / 1000))
+        fi
+    elif command -v sensors >/dev/null 2>&1; then
+        # Linux with lm-sensors
+        cpu_temp=$(sensors 2>/dev/null | grep -i "core 0\|cpu\|temp1" | grep -o "[0-9]*\.[0-9]*°C\|[0-9]*°C" | head -1 | tr -d '°C')
+    elif command -v cat >/dev/null 2>&1 && [ -f /sys/devices/virtual/thermal/thermal_zone0/temp ]; then
+        # Alternative thermal zone path
+        local temp_millidegrees=$(cat /sys/devices/virtual/thermal/thermal_zone0/temp 2>/dev/null)
+        if [ -n "$temp_millidegrees" ] && [ "$temp_millidegrees" -gt 0 ]; then
+            cpu_temp=$((temp_millidegrees / 1000))
+        fi
+    elif command -v vcgencmd >/dev/null 2>&1; then
+        # Raspberry Pi
+        cpu_temp=$(vcgencmd measure_temp 2>/dev/null | grep -o "[0-9]*\.[0-9]*" | head -1)
+    elif command -v pmset >/dev/null 2>&1; then
+        # macOS - try to get thermal state (not exact temp but indicator)
+        local thermal_state=$(pmset -g thermlog 2>/dev/null | tail -1 | awk '{print $2}' 2>/dev/null)
+        if [ -n "$thermal_state" ]; then
+            cpu_temp="$thermal_state"
+        fi
+    fi
+    
+    # Return the temperature or empty if not found
+    echo "$cpu_temp"
+}
+
+# Function to detect if system uses 18650 batteries
+is_18650_system() {
+    # Detect uConsole, GameHat, or other 18650-based systems
+    if [ -f /proc/device-tree/model ]; then
+        # Use tr to handle null bytes properly and suppress warnings
+        local model=$(cat /proc/device-tree/model 2>/dev/null | tr -d '\0' 2>/dev/null)
+        if [[ "$model" =~ (uConsole|GameHat|ClockworkPi) ]]; then
+            return 0
+        fi
+    fi
+    
+    # Check for uConsole specific hardware paths
+    if [ -d /sys/class/power_supply ] && [ -f /sys/class/power_supply/BAT0/capacity ]; then
+        # Look for battery capacity in the right range for dual 18650 (typically 4000-5000mAh)
+        local design_capacity=""
+        if [ -f /sys/class/power_supply/BAT0/charge_full_design ]; then
+            design_capacity=$(cat /sys/class/power_supply/BAT0/charge_full_design 2>/dev/null)
+        fi
+        
+        # Check for typical 18650 voltage ranges (2S configuration)
+        if [ -f /sys/class/power_supply/BAT0/voltage_now ]; then
+            local voltage_now=$(cat /sys/class/power_supply/BAT0/voltage_now 2>/dev/null)
+            if [ -n "$voltage_now" ]; then
+                # Convert to volts (microvolts to volts)
+                local voltage=$(echo "scale=1; $voltage_now / 1000000" | bc 2>/dev/null)
+                # 18650 2S: 3.0V-4.2V per cell = 6.0V-8.4V total (3.7V nominal = 7.4V)
+                if [ -n "$voltage" ] && echo "$voltage >= 5.5 && $voltage <= 9.0" | bc -l 2>/dev/null | grep -q 1; then
+                    return 0
+                fi
+            fi
+        fi
+    fi
+    
+    # Check for specific filesystem indicators
+    if [ -f /sys/firmware/devicetree/base/model ]; then
+        local model=$(cat /sys/firmware/devicetree/base/model 2>/dev/null | tr -d '\0' 2>/dev/null)
+        if [[ "$model" =~ (uConsole|GameHat|ClockworkPi) ]]; then
+            return 0
+        fi
+    fi
+    
+    # Temporary: Force enable for testing (you mentioned you have a uConsole)
+    # Remove this when detection is working properly
+    if [ -f /sys/class/power_supply/BAT0/capacity ]; then
+        # If we have a battery and it's not clearly a laptop, assume 18650
+        return 0
+    fi
+    
+    return 1
+}
+
+# Function to debug 18650 detection
+debug_18650_detection() {
+    echo "=== 18650 Detection Debug ==="
+    
+    echo "Device tree model checks:"
+    if [ -f /proc/device-tree/model ]; then
+        local model=$(cat /proc/device-tree/model 2>/dev/null | tr -d '\0' 2>/dev/null)
+        echo "  /proc/device-tree/model: '$model'"
+    else
+        echo "  /proc/device-tree/model: not found"
+    fi
+    
+    if [ -f /sys/firmware/devicetree/base/model ]; then
+        local model=$(cat /sys/firmware/devicetree/base/model 2>/dev/null | tr -d '\0' 2>/dev/null)
+        echo "  /sys/firmware/devicetree/base/model: '$model'"
+    else
+        echo "  /sys/firmware/devicetree/base/model: not found"
+    fi
+    
+    echo "Battery voltage check:"
+    if [ -f /sys/class/power_supply/BAT0/voltage_now ]; then
+        local voltage_now=$(cat /sys/class/power_supply/BAT0/voltage_now 2>/dev/null)
+        if [ -n "$voltage_now" ]; then
+            local voltage=$(echo "scale=1; $voltage_now / 1000000" | bc 2>/dev/null)
+            echo "  Current voltage: ${voltage}V (raw: $voltage_now µV)"
+            if [ -n "$voltage" ] && echo "$voltage >= 5.5 && $voltage <= 9.0" | bc -l 2>/dev/null | grep -q 1; then
+                echo "  Voltage matches 18650 2S range ✓"
+            else
+                echo "  Voltage outside 18650 2S range"
+            fi
+        else
+            echo "  No voltage data"
+        fi
+    else
+        echo "  No voltage file found"
+    fi
+    
+    echo "18650 detection result:"
+    if is_18650_system; then
+        echo "  ✓ Detected as 18650 system"
+    else
+        echo "  ✗ Not detected as 18650 system"
+    fi
+    
+    echo "Battery percentages:"
+    local raw_pct=$(get_raw_battery_percentage)
+    local massaged_pct=$(get_battery_percentage)
+    echo "  Raw: ${raw_pct}%"
+    echo "  Massaged: ${massaged_pct}%"
+    echo "=========================="
+}
+
+# Function to massage battery percentage based on battery type
+massage_battery_percentage() {
+    local raw_percent="$1"
+    
+    if [ -z "$raw_percent" ]; then
+        echo ""
+        return
+    fi
+    
+    # Check if this is an 18650 system
+    if is_18650_system; then
+        # 18650 usable range mapping:
+        # 40% raw = 0% usable (voltage cutoff)
+        # 100% raw = 100% usable (full charge)
+        # Linear remap: usable = max(0, (raw - 40) * 100 / 60)
+        
+        if [ "$raw_percent" -gt 40 ]; then
+            local usable_percent=$(echo "scale=0; ($raw_percent - 40) * 100 / 60" | bc 2>/dev/null)
+            echo "$usable_percent"
+        else
+            echo "0"
+        fi
+    else
+        # For non-18650 systems, return raw percentage unchanged
+        echo "$raw_percent"
+    fi
+}
 
 # Function to get battery percentage
 get_battery_percentage() {
@@ -161,8 +1238,8 @@ get_battery_percentage() {
         done
     fi
     
-    # Return the percentage or empty if not found
-    echo "$battery_percent"
+    # Massage the percentage based on battery type
+    massage_battery_percentage "$battery_percent"
 }
 
 # Function to get charging status
@@ -206,6 +1283,51 @@ get_charging_status() {
     fi
     
     echo "$charging"
+}
+
+# Function to get raw battery percentage (before 18650 remapping)
+get_raw_battery_percentage() {
+    local battery_percent=""
+    
+    # Same detection logic as get_battery_percentage but without remapping
+    if command -v pmset >/dev/null 2>&1; then
+        battery_percent=$(pmset -g batt | grep -Eo "[0-9]+%" | head -1 | tr -d '%')
+    elif [ -f /sys/class/power_supply/BAT0/capacity ]; then
+        battery_percent=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null)
+    elif [ -f /sys/class/power_supply/BAT1/capacity ]; then
+        battery_percent=$(cat /sys/class/power_supply/BAT1/capacity 2>/dev/null)
+    elif command -v upower >/dev/null 2>&1; then
+        local bat_path=$(upower -e | grep -i bat | head -1)
+        if [ -n "$bat_path" ]; then
+            battery_percent=$(upower -i "$bat_path" | grep -E "percentage" | awk '{print $2}' | tr -d '%')
+        fi
+    elif command -v acpi >/dev/null 2>&1; then
+        battery_percent=$(acpi -b | grep -P -o '[0-9]+(?=%)' | head -1)
+    elif [ -d /proc/acpi/battery ]; then
+        for battery in /proc/acpi/battery/BAT*; do
+            if [ -f "$battery/state" ]; then
+                local remaining=$(grep "remaining capacity" "$battery/state" | awk '{print $3}')
+                local full=$(grep "last full capacity" "$battery/info" | awk '{print $4}')
+                if [ -n "$remaining" ] && [ -n "$full" ] && [ "$full" -gt 0 ]; then
+                    battery_percent=$((remaining * 100 / full))
+                    break
+                fi
+            fi
+        done
+    elif command -v cat >/dev/null 2>&1 && [ -f /sys/class/power_supply/battery/capacity ]; then
+        battery_percent=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null)
+    elif command -v cat >/dev/null 2>&1; then
+        for ps in /sys/class/power_supply/*/capacity; do
+            if [ -f "$ps" ]; then
+                battery_percent=$(cat "$ps" 2>/dev/null)
+                if [ -n "$battery_percent" ] && [ "$battery_percent" -le 100 ]; then
+                    break
+                fi
+            fi
+        done
+    fi
+    
+    echo "$battery_percent"
 }
 
 # Function to display battery status
@@ -255,21 +1377,43 @@ show_battery_status() {
         battery_bg=" [CRITICAL]"
     fi
     
-    # Display with distinct formatting
-    echo -e "$DIM_PURPLE$battery_icon Battery: $battery_color$battery_percent%$charging_icon$battery_bg$RESET"
+    # Display with distinct formatting and 18650 awareness
+    local raw_percent
+    raw_percent=$(get_raw_battery_percentage)
+    
+    # Show raw percentage if different from massaged percentage (18650 systems)
+    if [ "$raw_percent" != "$battery_percent" ]; then
+        echo -e "$DIM_PURPLE$battery_icon Battery: $battery_color$battery_percent%$charging_icon$battery_bg$RESET $DIM_PURPLE(raw: ${raw_percent}%)$RESET"
+    else
+        echo -e "$DIM_PURPLE$battery_icon Battery: $battery_color$battery_percent%$charging_icon$battery_bg$RESET"
+    fi
 }
 
 # Function to check battery warnings
 check_battery_warnings() {
     local battery_percent
+    local check_percent
     battery_percent=$(get_battery_percentage)
     
     if [ -z "$battery_percent" ]; then
         return
     fi
     
-    # Check if we need to warn at specific thresholds
-    local warning_levels=(50 20 10 5)
+    # Determine threshold check method and warning levels based on battery type
+    local raw_percent
+    raw_percent=$(get_raw_battery_percentage)
+    
+    # If raw != massaged, we have a special battery system (like 18650)
+    if [ "$raw_percent" != "$battery_percent" ]; then
+        check_percent="$raw_percent"
+        # Aggressive warnings for 18650 voltage cutoff behavior
+        local warning_levels=(45 35 25 15 10)
+    else
+        check_percent="$battery_percent"
+        # Standard warning levels for regular batteries
+        local warning_levels=(50 20 10 5)
+    fi
+    
     local charging_status
     charging_status=$(get_charging_status)
     
@@ -280,7 +1424,7 @@ check_battery_warnings() {
     fi
     
     for level in "${warning_levels[@]}"; do
-        if [ "$battery_percent" -le "$level" ] && [ "$LAST_BATTERY_WARNING" -gt "$level" ]; then
+        if [ "$check_percent" -le "$level" ] && [ "$LAST_BATTERY_WARNING" -gt "$level" ]; then
             LAST_BATTERY_WARNING="$level"
             
             # Show warning
@@ -292,7 +1436,12 @@ check_battery_warnings() {
             fi
             
             echo ""
-            echo -e "$warning_color⚠️  BATTERY WARNING: $battery_percent% remaining$RESET"
+            # Show both values if they differ (special battery system)
+            if [ "$raw_percent" != "$battery_percent" ]; then
+                echo -e "$warning_color⚠️  BATTERY WARNING: $battery_percent% usable (${check_percent}% raw) remaining$RESET"
+            else
+                echo -e "$warning_color⚠️  BATTERY WARNING: $battery_percent% remaining$RESET"
+            fi
             
             # Speak warning if voice enabled
             if [ "$VOICE_ENABLED" = true ]; then
@@ -309,7 +1458,7 @@ check_battery_command() {
     local battery_percent
     local charging_status
     
-    echo -e "$DIM_PURPLE[🔋 Battery Diagnostic Check...]$RESET"
+    echo -e "$DIM_PURPLE[🔋 Enhanced Battery Diagnostic Check...]$RESET"
     
     battery_percent=$(get_battery_percentage)
     charging_status=$(get_charging_status)
@@ -350,9 +1499,9 @@ check_battery_command() {
     # Show detailed status
     show_battery_status
     
-    # Additional details
+    # Enhanced battery diagnostics
     echo -e "$DIM_PURPLE┌─────────────────────────────────────────────────────┐$RESET"
-    echo -e "$DIM_PURPLE│                BATTERY DETAILS                     │$RESET"
+    echo -e "$DIM_PURPLE│                ENHANCED BATTERY ANALYSIS           │$RESET"
     echo -e "$DIM_PURPLE└─────────────────────────────────────────────────────┘$RESET"
     
     local status_text="Discharging"
@@ -360,39 +1509,746 @@ check_battery_command() {
         status_text="Charging"
     fi
     
-    echo -e "$CYAN📊 Level: $battery_percent%$RESET"
+    # Show both raw and adjusted percentages for special battery systems
+    local raw_percent
+    raw_percent=$(get_raw_battery_percentage)
+    
+    if [ "$raw_percent" != "$battery_percent" ]; then
+        echo -e "$CYAN📊 Usable Capacity: $battery_percent% (raw: ${raw_percent}%)$RESET"
+        echo -e "$CYAN⚙️  Battery Remapping: Adjusted for voltage cutoff at 40% raw$RESET"
+    else
+        echo -e "$CYAN📊 Battery Level: $battery_percent%$RESET"
+    fi
     echo -e "$CYAN🔌 Status: $status_text$RESET"
     echo -e "$CYAN⚠️  Last Warning: $LAST_BATTERY_WARNING%$RESET"
     
-    # Health assessment
+    # Try to get voltage information (Linux)
+    local voltage=""
+    local voltage_now=""
+    local voltage_min=""
+    if [ -f /sys/class/power_supply/BAT0/voltage_now ]; then
+        voltage_now=$(cat /sys/class/power_supply/BAT0/voltage_now 2>/dev/null)
+        if [ -n "$voltage_now" ]; then
+            # Convert microvolts to volts
+            voltage=$(echo "scale=2; $voltage_now / 1000000" | bc 2>/dev/null || echo "unknown")
+        fi
+    fi
+    
+    if [ -f /sys/class/power_supply/BAT0/voltage_min_design ]; then
+        voltage_min=$(cat /sys/class/power_supply/BAT0/voltage_min_design 2>/dev/null)
+        if [ -n "$voltage_min" ]; then
+            voltage_min=$(echo "scale=2; $voltage_min / 1000000" | bc 2>/dev/null || echo "unknown")
+        fi
+    fi
+    
+    # Battery capacity information
+    local capacity_full=""
+    local capacity_design=""
+    if [ -f /sys/class/power_supply/BAT0/charge_full ]; then
+        capacity_full=$(cat /sys/class/power_supply/BAT0/charge_full 2>/dev/null)
+    fi
+    if [ -f /sys/class/power_supply/BAT0/charge_full_design ]; then
+        capacity_design=$(cat /sys/class/power_supply/BAT0/charge_full_design 2>/dev/null)
+    fi
+    
+    # Calculate battery wear
+    local wear_percentage=""
+    if [ -n "$capacity_full" ] && [ -n "$capacity_design" ] && [ "$capacity_design" -gt 0 ]; then
+        wear_percentage=$(echo "scale=1; (1 - $capacity_full / $capacity_design) * 100" | bc 2>/dev/null)
+    fi
+    
+    # Display advanced info
+    if [ -n "$voltage" ] && [ "$voltage" != "unknown" ]; then
+        echo -e "$CYAN⚡ Current Voltage: ${voltage}V$RESET"
+        if [ -n "$voltage_min" ] && [ "$voltage_min" != "unknown" ]; then
+            echo -e "$CYAN⚡ Min Design Voltage: ${voltage_min}V$RESET"
+            
+            # Voltage health check
+            local voltage_ratio
+            voltage_ratio=$(echo "scale=2; $voltage / $voltage_min" | bc 2>/dev/null)
+            if [ -n "$voltage_ratio" ]; then
+                if echo "$voltage_ratio < 1.05" | bc -l 2>/dev/null | grep -q 1; then
+                    echo -e "$RED⚠️  WARNING: Voltage critically low (${voltage}V)$RESET"
+                    echo -e "$RED   This may explain unexpected shutdowns!$RESET"
+                elif echo "$voltage_ratio < 1.15" | bc -l 2>/dev/null | grep -q 1; then
+                    echo -e "$YELLOW⚠️  CAUTION: Voltage somewhat low (${voltage}V)$RESET"
+                fi
+            fi
+        fi
+    fi
+    
+    if [ -n "$wear_percentage" ]; then
+        echo -e "$CYAN🔋 Battery Wear: ${wear_percentage}%$RESET"
+        if echo "$wear_percentage > 30" | bc -l 2>/dev/null | grep -q 1; then
+            echo -e "$YELLOW⚠️  Battery shows significant wear$RESET"
+        fi
+    fi
+    
+    # macOS specific diagnostics
+    if command -v pmset >/dev/null 2>&1; then
+        echo -e "$CYAN🍎 macOS Battery Details:$RESET"
+        pmset -g batt | head -5 | while read line; do
+            echo -e "$DIM_PURPLE   $line$RESET"
+        done
+    fi
+    
+    # Health assessment with voltage consideration
+    local health_warning=""
+    if [ -n "$voltage" ] && [ "$voltage" != "unknown" ] && [ -n "$voltage_min" ]; then
+        local voltage_ratio
+        voltage_ratio=$(echo "scale=2; $voltage / $voltage_min" | bc 2>/dev/null)
+        if [ -n "$voltage_ratio" ] && echo "$voltage_ratio < 1.1" | bc -l 2>/dev/null | grep -q 1; then
+            health_warning=" (VOLTAGE CRITICAL)"
+        fi
+    fi
+    
     if [ "$battery_percent" -ge 75 ]; then
-        echo -e "$GREEN💚 Health: Excellent$RESET"
+        echo -e "$GREEN💚 Health: Excellent$health_warning$RESET"
     elif [ "$battery_percent" -ge 50 ]; then
-        echo -e "$YELLOW💛 Health: Good$RESET"
+        echo -e "$YELLOW💛 Health: Good$health_warning$RESET"
     elif [ "$battery_percent" -ge 20 ]; then
-        echo -e "$ORANGE🧡 Health: Low - Consider charging$RESET"
+        echo -e "$ORANGE🧡 Health: Low - Consider charging$health_warning$RESET"
     else
-        echo -e "$RED❤️  Health: Critical - Charge immediately$RESET"
+        echo -e "$RED❤️  Health: Critical - Charge immediately$health_warning$RESET"
+    fi
+    
+    # 18650 battery specific warnings
+    echo ""
+    echo -e "$CYAN🔋 18650 Battery System Detected (uConsole):$RESET"
+    echo -e "$YELLOW⚠️  18650s have hard voltage cutoff around 3.0V per cell$RESET"
+    echo -e "$YELLOW⚠️  Reported percentage may be inaccurate near cutoff$RESET"
+    echo -e "$YELLOW💡 Charge before 40% to avoid boot failure$RESET"
+    
+    # Shutdown prediction warning
+    if [ -n "$voltage" ] && [ "$voltage" != "unknown" ] && [ -n "$voltage_min" ]; then
+        local voltage_ratio
+        voltage_ratio=$(echo "scale=2; $voltage / $voltage_min" | bc 2>/dev/null)
+        if [ -n "$voltage_ratio" ] && echo "$voltage_ratio < 1.1" | bc -l 2>/dev/null | grep -q 1; then
+            echo ""
+            echo -e "$RED🚨 SHUTDOWN RISK: Low voltage detected!$RESET"
+            echo -e "$YELLOW💡 Your device may shut down unexpectedly even at moderate charge levels$RESET"
+            echo -e "$YELLOW💡 This is common with 18650 batteries near voltage cutoff$RESET"
+            echo -e "$YELLOW💡 Consider charging or battery replacement$RESET"
+        elif [ "$battery_percent" -lt 45 ]; then
+            echo ""
+            echo -e "$RED⚠️  CRITICAL: 18650 voltage cutoff imminent!$RESET"
+            echo -e "$YELLOW💡 Charge immediately to avoid shutdown and boot failure$RESET"
+        fi
     fi
     
     # Voice feedback if enabled
     if [ "$VOICE_ENABLED" = true ]; then
-        if [ "$battery_percent" -le 20 ]; then
-            speak_routine_message "battery_check_low" "Battery level is $battery_percent percent. You should charge soon."
+        if [ "$battery_percent" -le 20 ] || [ -n "$health_warning" ]; then
+            speak_routine_message "battery_check_warning" "Battery diagnostics show potential issues. Check the display for details."
         else
             speak_routine_message "battery_check_good" "Battery level is $battery_percent percent."
         fi
     fi
 }
 
+# ── STREAMING SPEECH SYSTEM FUNCTIONS ──
+
+# Function to initialize streaming speech system
+init_streaming_speech() {
+    if [ "$STREAMING_SPEECH_ENABLED" != true ]; then
+        return
+    fi
+    
+    # Reset counters and buffer
+    SENTENCE_INDEX_COUNTER=0
+    EXPECTED_PLAYBACK_INDEX=1
+    SENTENCE_BUFFER=""
+    
+    # Clean up any existing files
+    rm -f "$STREAMING_SPEECH_DIR"/tts_*.wav 2>/dev/null
+    rm -f "$PLAYBACK_QUEUE_FILE" 2>/dev/null
+    
+    # Start playback coordinator in background
+    start_playback_coordinator
+    
+    echo -e "$DIM_PURPLE[🔊 Streaming speech system initialized]$RESET"
+}
+
+# Function to start the playback coordinator background process
+start_playback_coordinator() {
+    # Stop any existing coordinator
+    stop_playback_coordinator
+    
+    # Start new coordinator in background
+    {
+        while true; do
+            if [ -f "$PLAYBACK_QUEUE_FILE" ]; then
+                # Check if next expected file is ready
+                local next_file="$STREAMING_SPEECH_DIR/tts_${EXPECTED_PLAYBACK_INDEX}.wav"
+                
+                if [ -f "$next_file" ] && [ -s "$next_file" ]; then
+                    # Play the file
+                    aplay "$next_file" >/dev/null 2>&1
+                    
+                    # Clean up played file
+                    rm -f "$next_file" 2>/dev/null
+                    
+                    # Remove the played index from queue tracking before updating
+                    grep -v "^${EXPECTED_PLAYBACK_INDEX}:" "$PLAYBACK_QUEUE_FILE" > "$PLAYBACK_QUEUE_FILE.tmp" 2>/dev/null || true
+                    mv "$PLAYBACK_QUEUE_FILE.tmp" "$PLAYBACK_QUEUE_FILE" 2>/dev/null || true
+                    
+                    # Update expected index
+                    EXPECTED_PLAYBACK_INDEX=$((EXPECTED_PLAYBACK_INDEX + 1))
+                else
+                    # Wait briefly before checking again
+                    sleep 0.1
+                fi
+            else
+                # No queue file, wait longer
+                sleep 0.5
+            fi
+            
+            # Exit if streaming speech is disabled
+            if [ "$STREAMING_SPEECH_ENABLED" != true ]; then
+                break
+            fi
+        done
+    } &
+    
+    PLAYBACK_COORDINATOR_PID=$!
+}
+
+# Function to stop the playback coordinator
+stop_playback_coordinator() {
+    if [ -n "$PLAYBACK_COORDINATOR_PID" ]; then
+        kill "$PLAYBACK_COORDINATOR_PID" 2>/dev/null || true
+        wait "$PLAYBACK_COORDINATOR_PID" 2>/dev/null || true
+        PLAYBACK_COORDINATOR_PID=""
+    fi
+}
+
+# Function to cleanup streaming speech system
+cleanup_streaming_speech() {
+    stop_playback_coordinator
+    
+    # Clean up temporary files
+    rm -f "$STREAMING_SPEECH_DIR"/tts_*.wav 2>/dev/null
+    rm -f "$PLAYBACK_QUEUE_FILE" 2>/dev/null
+    
+    # Reset state
+    SENTENCE_INDEX_COUNTER=0
+    EXPECTED_PLAYBACK_INDEX=1
+    SENTENCE_BUFFER=""
+}
+
+# Function to detect sentence boundaries from streaming text
+detect_sentence_boundaries() {
+    local new_text="$1"
+    
+    # Add new text to buffer - this should accumulate!
+    SENTENCE_BUFFER+="$new_text"
+    
+    # Debug: Show what's being added and current buffer state
+    debug_log "Adding text chunk: '$(echo "$new_text" | tr '\n' ' ' | head -c 20)...'"
+    debug_log "Buffer now (${#SENTENCE_BUFFER} chars): '$(echo "$SENTENCE_BUFFER" | tr '\n' ' ' | head -c 50)...'"
+    
+    # Simple bash sentence detection
+    local detected_sentences=""
+    local temp_buffer="$SENTENCE_BUFFER"
+    
+    # Extract complete sentences (ending with . ! ?) - speak immediately on punctuation
+    while [[ "$temp_buffer" =~ ^(.*[.!?])(.*)$ ]]; do
+        local sentence="${BASH_REMATCH[1]}"
+        sentence=$(echo "$sentence" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+        
+        if [ -n "$sentence" ] && [[ "$sentence" =~ [a-zA-Z0-9] ]]; then
+            if [ -n "$detected_sentences" ]; then
+                detected_sentences="${detected_sentences}|||${sentence}"
+            else
+                detected_sentences="$sentence"
+            fi
+            debug_log "Extracted sentence: '$sentence'"
+        fi
+        
+        temp_buffer="${BASH_REMATCH[2]}"
+        temp_buffer=$(echo "$temp_buffer" | sed 's/^[[:space:]]*//')  # Remove leading spaces
+    done
+    
+    # Update buffer with remaining text
+    debug_log "Before buffer update - temp_buffer: '$(echo "$temp_buffer" | head -c 30)...'"
+    debug_log "Before buffer update - original buffer: '$(echo "$SENTENCE_BUFFER" | head -c 30)...'"
+    SENTENCE_BUFFER="$temp_buffer"
+    debug_log "After buffer update - new buffer: '$(echo "$SENTENCE_BUFFER" | head -c 30)...'"
+    
+    # Debug: Show results
+    local sentence_count=0
+    if [ -n "$detected_sentences" ]; then
+        sentence_count=$(echo "$detected_sentences" | grep -o "|||" | wc -l)
+        sentence_count=$((sentence_count + 1))  # Add 1 since separator count is n-1
+    fi
+    
+    if [ "$sentence_count" -gt 0 ]; then
+        debug_log "Found $sentence_count complete sentences, remaining buffer: '$(echo "$SENTENCE_BUFFER" | head -c 30)...'"
+    else
+        debug_log "No complete sentences found, buffer: '$(echo "$SENTENCE_BUFFER" | head -c 30)...'"
+    fi
+    
+    # Output sentences (convert from pipe-separated back to line-separated)
+    if [ -n "$detected_sentences" ]; then
+        echo "$detected_sentences" | tr '|||' '\n'
+    fi
+}
+
+# Function to check if text should be spoken (filter out think-tags and system messages)
+should_speak_text() {
+    local text="$1"
+    
+    # Skip if empty
+    [ -z "$text" ] && return 1
+    
+    # Skip system messages
+    [[ "$text" =~ ^\[.*\].*$ ]] && return 1
+    
+    # Skip think-tag content (we'll handle this in the streaming parser)
+    [[ "$text" =~ ^\<think\>.*\</think\>$ ]] && return 1
+    
+    # Skip URLs and technical markers
+    [[ "$text" =~ ^https?:// ]] && return 1
+    [[ "$text" =~ ^[[:space:]]*[\[\(].*[\]\)][[:space:]]*$ ]] && return 1
+    
+    # Skip very short fragments (less than 3 characters)
+    [ ${#text} -lt 3 ] && return 1
+    
+    return 0
+}
+
+# Function to dispatch sentence to TTS with index
+dispatch_sentence_to_tts() {
+    local sentence="$1"
+    local index="$2"
+    
+    # Skip if sentence shouldn't be spoken
+    if ! should_speak_text "$sentence"; then
+        return
+    fi
+    
+    # Create background TTS process
+    {
+        local output_file="$STREAMING_SPEECH_DIR/tts_${index}.wav"
+        local temp_file="$STREAMING_SPEECH_DIR/tts_${index}.tmp"
+        
+        # Escape quotes in the sentence for JSON (avoid xargs issues)
+        local escaped_sentence
+        escaped_sentence=$(echo "$sentence" | sed 's/"/\\"/g' | sed 's/'"'"'/\\'"'"'/g')
+        
+        # Call TTS API to generate audio file
+        local api_response
+        api_response=$(curl -s -X POST "$CODEDECK_API/v1/tts/generate" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\": \"$escaped_sentence\", \"voice\": \"glados\"}" 2>/dev/null)
+            
+        if [ $? -eq 0 ] && [ -n "$api_response" ]; then
+            # Parse the JSON response to get audio path
+            local audio_path
+            audio_path=$(echo "$api_response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    if 'audio_path' in data:
+        print(data['audio_path'])
+except:
+    pass
+" 2>/dev/null)
+            
+            if [ -n "$audio_path" ]; then
+                # Download the audio file from the server
+                local full_url="$CODEDECK_API$audio_path"
+                if curl -s "$full_url" -o "$temp_file" 2>/dev/null && [ -s "$temp_file" ]; then
+                    # Validate it's an audio file (check for WAV header)
+                    if head -c 4 "$temp_file" 2>/dev/null | grep -q "RIFF\|WAV"; then
+                        # Move to final location
+                        mv "$temp_file" "$output_file"
+                        
+                        # Add to queue tracking
+                        echo "${index}:${output_file}" >> "$PLAYBACK_QUEUE_FILE"
+                        debug_log "TTS file created: $output_file"
+                    else
+                        # Not a valid audio file
+                        rm -f "$temp_file" 2>/dev/null
+                        debug_log "TTS response not valid audio"
+                    fi
+                else
+                    debug_log "Failed to download audio from $full_url"
+                fi
+            else
+                debug_log "No audio_path in API response: $api_response"
+            fi
+        else
+            # Cleanup on failure
+            rm -f "$temp_file" 2>/dev/null
+        fi
+    } &
+}
+
+# Function to process streaming text for sentence-based speech
+process_streaming_text_for_speech() {
+    local text="$1"
+    local inside_think_tag="$2"  # true/false
+    
+    # Skip processing if streaming speech is disabled
+    if [ "$STREAMING_SPEECH_ENABLED" != true ]; then
+        return
+    fi
+    
+    # Skip think-tag content
+    if [ "$inside_think_tag" = true ]; then
+        return
+    fi
+    
+    # Detect complete sentences from the text
+    local sentences
+    sentences=$(detect_sentence_boundaries "$text")
+    
+    # Process each complete sentence
+    if [ -n "$sentences" ]; then
+        while IFS= read -r sentence; do
+            if [ -n "$sentence" ]; then
+                # Increment counter and dispatch
+                SENTENCE_INDEX_COUNTER=$((SENTENCE_INDEX_COUNTER + 1))
+                debug_log "Dispatching sentence #$SENTENCE_INDEX_COUNTER to TTS: '$(echo "$sentence" | head -c 40)...'"
+                dispatch_sentence_to_tts "$sentence" "$SENTENCE_INDEX_COUNTER"
+            fi
+        done <<< "$sentences"
+    fi
+}
+
+# Function to toggle streaming speech
+toggle_streaming_speech() {
+    if [ "$STREAMING_SPEECH_ENABLED" = true ]; then
+        STREAMING_SPEECH_ENABLED=false
+        cleanup_streaming_speech
+        show_property_change "Streaming speech DISABLED" "Real-time sentence speech off" "🔇"
+        play_sound_effect "confirm"
+    else
+        STREAMING_SPEECH_ENABLED=true
+        init_streaming_speech
+        show_property_change "Streaming speech ENABLED" "Real-time sentence speech active" "🎙️"
+        play_sound_effect "confirm"
+        
+        # Test with a sample sentence
+        echo -e "$DIM_PURPLE[Testing streaming speech...]$RESET"
+        dispatch_sentence_to_tts "Streaming speech system is now active." 1
+    fi
+}
+
 # ── CACHED SPEECH SYSTEM ──
 
-# Function to speak routine messages with automatic caching
+# Function to check TTS capabilities and install Festival if needed
+check_tts_capabilities() {
+    # Check for Piper in multiple locations
+    local piper_paths=(
+        "$(command -v piper 2>/dev/null)"
+        "$VIRTUAL_ENV/bin/piper"
+        "$HOME/.local/bin/piper"
+        "$(which piper 2>/dev/null)"
+        "./venv/bin/piper"
+        "../venv/bin/piper"
+        "$CODEDECK_VENV_PATH/bin/piper"
+    )
+    
+    for piper_path in "${piper_paths[@]}"; do
+        if [ -n "$piper_path" ] && [ -x "$piper_path" ]; then
+            echo "piper"
+            return 0
+        fi
+    done
+    
+    # Check for Festival
+    if command -v festival >/dev/null 2>&1; then
+        echo "festival"
+        return 0
+    fi
+    
+    # No TTS found - show installation guidance
+    echo -e "$YELLOW[!] No local TTS found.$RESET"
+    echo -e "$DIM_PURPLE💡 Install Festival TTS manually:$RESET"
+    
+    if command -v apt >/dev/null 2>&1; then
+        echo -e "$DIM_PURPLE   Ubuntu/Debian: sudo apt update && sudo apt install festival$RESET"
+    elif command -v yum >/dev/null 2>&1; then
+        echo -e "$DIM_PURPLE   RHEL/CentOS: sudo yum install festival$RESET"
+    elif command -v dnf >/dev/null 2>&1; then
+        echo -e "$DIM_PURPLE   Fedora: sudo dnf install festival$RESET"
+    elif command -v brew >/dev/null 2>&1; then
+        echo -e "$DIM_PURPLE   macOS: brew install festival$RESET"
+    elif command -v pacman >/dev/null 2>&1; then
+        echo -e "$DIM_PURPLE   Arch: sudo pacman -S festival$RESET"
+    else
+        echo -e "$DIM_PURPLE   Or download from: http://www.cstr.ed.ac.uk/projects/festival/$RESET"
+    fi
+    
+    echo -e "$DIM_PURPLE💡 Alternative: Install Piper TTS: pip install piper-tts$RESET"
+    echo "none"
+    return 1
+}
+
+# Function to find Piper executable
+find_piper_executable() {
+    local piper_paths=(
+        "$(command -v piper 2>/dev/null)"
+        "$VIRTUAL_ENV/bin/piper"
+        "$HOME/.local/bin/piper"
+        "$(which piper 2>/dev/null)"
+        "./venv/bin/piper"
+        "../venv/bin/piper"
+        "$CODEDECK_VENV_PATH/bin/piper"
+    )
+    
+    for piper_path in "${piper_paths[@]}"; do
+        if [ -n "$piper_path" ] && [ -x "$piper_path" ]; then
+            echo "$piper_path"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
+# Function to speak with Piper
+# Function to get current voice model path
+get_current_voice_model() {
+    # Check configured voice models directory first
+    if [ -f "$VOICE_MODELS_DIR/$CURRENT_VOICE" ]; then
+        echo "$VOICE_MODELS_DIR/$CURRENT_VOICE"
+        return 0
+    fi
+    
+    # Fall back to system locations
+    local voice_paths=(
+        "/usr/share/piper/voices/$CURRENT_VOICE"
+        "/usr/local/share/piper/voices/$CURRENT_VOICE"
+        "$HOME/.local/share/piper/voices/$CURRENT_VOICE"
+        "$VIRTUAL_ENV/share/piper/voices/$CURRENT_VOICE"
+        "$CODEDECK_VENV_PATH/share/piper/voices/$CURRENT_VOICE"
+    )
+    
+    for voice_path in "${voice_paths[@]}"; do
+        if [ -n "$voice_path" ] && [ -f "$voice_path" ]; then
+            echo "$voice_path"
+            return 0
+        fi
+    done
+    
+    # Try to find any available voice
+    local voice_paths=(
+        "/usr/share/piper/voices/en_US-lessac-medium.onnx"
+        "/usr/local/share/piper/voices/en_US-lessac-medium.onnx"
+        "$HOME/.local/share/piper/voices/en_US-lessac-medium.onnx"
+        "$VIRTUAL_ENV/share/piper/voices/en_US-lessac-medium.onnx"
+        "$CODEDECK_VENV_PATH/share/piper/voices/en_US-lessac-medium.onnx"
+    )
+    
+    for voice_path in "${voice_paths[@]}"; do
+        if [ -n "$voice_path" ] && [ -f "$voice_path" ]; then
+            echo "$voice_path"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
+# Function to list available voice models
+list_voice_models() {
+    echo -e "$CYAN[📢 Voice Models]$RESET"
+    echo -e "$DIM_PURPLE═══════════════════════════════════════════════════════════════$RESET"
+    
+    local voice_count=0
+    local current_shown=false
+    
+    # Check configured voice models directory
+    if [ -d "$VOICE_MODELS_DIR" ]; then
+        echo -e "$BRIGHT_CYAN📁 Custom Voice Models ($VOICE_MODELS_DIR):$RESET"
+        local found_custom=false
+        
+        for voice in "$VOICE_MODELS_DIR"/*.onnx; do
+            if [ -f "$voice" ]; then
+                local voice_name=$(basename "$voice")
+                voice_count=$((voice_count + 1))
+                found_custom=true
+                
+                if [ "$voice_name" = "$CURRENT_VOICE" ]; then
+                    echo -e "$GREEN  ✓ $voice_name (CURRENT)$RESET"
+                    current_shown=true
+                else
+                    echo -e "$DIM_PURPLE    $voice_name$RESET"
+                fi
+            fi
+        done
+        
+        if [ "$found_custom" = false ]; then
+            echo -e "$YELLOW    No custom voice models found$RESET"
+        fi
+        echo ""
+    else
+        echo -e "$YELLOW📁 Custom voice directory not found: $VOICE_MODELS_DIR$RESET"
+        echo ""
+    fi
+    
+    # Check system locations
+    echo -e "$BRIGHT_CYAN🔧 System Voice Models:$RESET"
+    local system_voice_paths=(
+        "/usr/share/piper/voices"
+        "/usr/local/share/piper/voices"
+        "$HOME/.local/share/piper/voices"
+        "$VIRTUAL_ENV/share/piper/voices"
+        "$CODEDECK_VENV_PATH/share/piper/voices"
+    )
+    
+    local found_system=false
+    for voice_dir in "${system_voice_paths[@]}"; do
+        if [ -n "$voice_dir" ] && [ -d "$voice_dir" ]; then
+            local dir_voices=()
+            while IFS= read -r -d '' voice; do
+                dir_voices+=("$voice")
+            done < <(find "$voice_dir" -name "*.onnx" -print0 2>/dev/null)
+            
+            if [ ${#dir_voices[@]} -gt 0 ]; then
+                found_system=true
+                echo -e "$DIM_PURPLE  $voice_dir:$RESET"
+                
+                for voice in "${dir_voices[@]}"; do
+                    local voice_name=$(basename "$voice")
+                    voice_count=$((voice_count + 1))
+                    
+                    if [ "$voice_name" = "$CURRENT_VOICE" ] && [ "$current_shown" = false ]; then
+                        echo -e "$GREEN    ✓ $voice_name (CURRENT)$RESET"
+                        current_shown=true
+                    else
+                        echo -e "$DIM_PURPLE      $voice_name$RESET"
+                    fi
+                done
+            fi
+        fi
+    done
+    
+    if [ "$found_system" = false ]; then
+        echo -e "$YELLOW    No system voice models found$RESET"
+    fi
+    
+    echo ""
+    echo -e "$DIM_PURPLE═══════════════════════════════════════════════════════════════$RESET"
+    echo -e "$BRIGHT_CYAN📊 Total voices found: $voice_count$RESET"
+    echo -e "$BRIGHT_CYAN🎙️ Current voice: $CURRENT_VOICE$RESET"
+    
+    if [ "$current_shown" = false ]; then
+        echo -e "$YELLOW⚠ Current voice model not found in any location!$RESET"
+    fi
+    
+    echo ""
+    echo -e "$DIM_PURPLE💡 Use 'voice set <name>' to change voice model$RESET"
+    echo -e "$DIM_PURPLE💡 Voice models directory: $VOICE_MODELS_DIR$RESET"
+}
+
+# Function to set voice model
+set_voice_model() {
+    local voice_name="$1"
+    
+    if [ -z "$voice_name" ]; then
+        echo -e "$RED[✗] Voice name required$RESET"
+        echo -e "$YELLOW💡 Usage: voice set <voice_name>$RESET"
+        echo -e "$YELLOW💡 Use 'voice list' to see available voices$RESET"
+        return 1
+    fi
+    
+    # Add .onnx extension if not present
+    if [[ "$voice_name" != *.onnx ]]; then
+        voice_name="${voice_name}.onnx"
+    fi
+    
+    # Check if voice exists in configured directory
+    if [ -f "$VOICE_MODELS_DIR/$voice_name" ]; then
+        CURRENT_VOICE="$voice_name"
+        echo -e "$GREEN[✓] Voice model set to: $voice_name$RESET"
+        echo -e "$DIM_PURPLE    Location: $VOICE_MODELS_DIR/$voice_name$RESET"
+        return 0
+    fi
+    
+    # Check system locations
+    local voice_paths=(
+        "/usr/share/piper/voices/$voice_name"
+        "/usr/local/share/piper/voices/$voice_name"
+        "$HOME/.local/share/piper/voices/$voice_name"
+        "$VIRTUAL_ENV/share/piper/voices/$voice_name"
+        "$CODEDECK_VENV_PATH/share/piper/voices/$voice_name"
+    )
+    
+    for voice_path in "${voice_paths[@]}"; do
+        if [ -n "$voice_path" ] && [ -f "$voice_path" ]; then
+            CURRENT_VOICE="$voice_name"
+            echo -e "$GREEN[✓] Voice model set to: $voice_name$RESET"
+            echo -e "$DIM_PURPLE    Location: $voice_path$RESET"
+            return 0
+        fi
+    done
+    
+    echo -e "$RED[✗] Voice model not found: $voice_name$RESET"
+    echo -e "$YELLOW💡 Use 'voice list' to see available voices$RESET"
+    return 1
+}
+
+speak_with_piper() {
+    local message="$1"
+    local cache_file="$2"
+    
+    # Find Piper executable
+    local piper_exec
+    piper_exec=$(find_piper_executable)
+    if [ $? -ne 0 ]; then
+        return 1
+    fi
+    
+    # Get current voice model
+    local voice_model
+    voice_model=$(get_current_voice_model)
+    
+    if [ $? -eq 0 ] && [ -n "$voice_model" ]; then
+        echo "$message" | "$piper_exec" --model "$voice_model" --output_file "$cache_file" >/dev/null 2>&1
+    else
+        # Try without specifying model (use default)
+        echo "$message" | "$piper_exec" --output_file "$cache_file" >/dev/null 2>&1
+    fi
+    
+    if [ -f "$cache_file" ] && [ -s "$cache_file" ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to speak with Festival
+speak_with_festival() {
+    local message="$1"
+    
+    # Use Festival's text2wave to generate audio file
+    local temp_wav="/tmp/festival_$(date +%s)_$$.wav"
+    
+    if echo "$message" | festival --tts --otype riff --output "$temp_wav" >/dev/null 2>&1; then
+        if [ -f "$temp_wav" ] && [ -s "$temp_wav" ]; then
+            aplay "$temp_wav" >/dev/null 2>&1 &
+            (sleep 3 && rm -f "$temp_wav") &
+            return 0
+        fi
+    fi
+    
+    # Fallback to direct Festival TTS (no file)
+    echo "$message" | festival --tts >/dev/null 2>&1 &
+    return $?
+}
+
+# Function to speak routine messages with hierarchical TTS fallback
 speak_routine_message() {
     local cache_key="$1"
     local message="$2"
     
     [ -z "$message" ] && return 1
+    
+    debug_log "speak_routine_message called: cache_key='$cache_key', message='$message'"
     
     local cache_file="$SPEECH_CACHE_DIR/${cache_key}.wav"
     
@@ -414,36 +2270,79 @@ speak_routine_message() {
         rm -f "$cache_file" 2>/dev/null
     fi
     
-    # Generate new audio
-    echo -ne "$DIM_PURPLE[🎤 ♪]$RESET"
+    # TTS Hierarchy: Piper -> CodeDeck API -> Festival
     
-    # Ensure recording cache directory exists
+    # 1. Try Piper first (if available) - skip API if Piper works locally
+    if find_piper_executable >/dev/null 2>&1; then
+        echo -ne "$DIM_PURPLE[🤖 Piper]$RESET"
+        debug_log "Attempting Piper TTS for cache_key='$cache_key'"
+        if speak_with_piper "$message" "$cache_file"; then
+            # Play immediately without delays - Piper succeeded, skip other methods
+            debug_log "Piper TTS successful, playing audio and returning early"
+            aplay "$cache_file" >/dev/null 2>&1 &
+            return 0
+        fi
+        echo -ne "$DIM_PURPLE[✗]$RESET"
+        debug_log "Piper TTS failed, continuing to API"
+        # Piper failed, continue to API
+    else
+        debug_log "Piper not available, skipping to API"
+    fi
+    
+    # 2. Try CodeDeck API (only if Piper not available or failed)
+    echo -ne "$DIM_PURPLE[🌐 API]$RESET"
+    debug_log "Attempting CodeDeck API TTS for cache_key='$cache_key'"
+    
+    # Use generate endpoint with audio_file=true to get audio bytes directly
     mkdir -p "$RECORDING_CACHE_DIR" 2>/dev/null
     local temp_audio="$RECORDING_CACHE_DIR/codedeck_voice_$(date +%s)_$$.wav"
     
-    # Get audio from API
-    if curl -s -X POST "$CODEDECK_API/v1/tts/speak" \
+    # Request audio file bytes directly
+    if curl -s -X POST "$CODEDECK_API/v1/tts/generate" \
         -H "Content-Type: application/json" \
         -d "{\"text\": \"$message\", \"voice\": \"glados\", \"audio_file\": true}" \
         -o "$temp_audio" 2>/dev/null && [ -s "$temp_audio" ]; then
         
-        # Validate audio file
-        if ! head -c 1 "$temp_audio" 2>/dev/null | grep -q "{"; then
+        # Validate it's an audio file (check for WAV header)
+        if head -c 4 "$temp_audio" 2>/dev/null | grep -q "RIFF"; then
             # Try to save to cache (best effort)
             cp "$temp_audio" "$cache_file" 2>/dev/null
             
-            # Play audio
+            # Play audio locally on console device
+            debug_log "CodeDeck API TTS successful, playing audio locally"
             aplay "$temp_audio" >/dev/null 2>&1 &
             
-            # Clean up temp file after delay
+            # Clean up temp file after reasonable delay
             (sleep 5 && rm -f "$temp_audio") &
             return 0
+        else
+            debug_log "API response is not a valid WAV file"
+            rm -f "$temp_audio" 2>/dev/null
         fi
+    else
+        debug_log "Failed to get audio bytes from CodeDeck API generate endpoint"
+        rm -f "$temp_audio" 2>/dev/null
     fi
     
-    # Cleanup on failure
-    rm -f "$temp_audio" 2>/dev/null
-    echo -ne "$DIM_PURPLE[🔊 ✗]$RESET"
+    echo -ne "$DIM_PURPLE[✗]$RESET"
+    
+    # 3. Fall back to Festival
+    local tts_capability
+    tts_capability=$(check_tts_capabilities)
+    
+    if [ "$tts_capability" = "festival" ]; then
+        echo -ne "$DIM_PURPLE[🎭 Festival]$RESET"
+        debug_log "Attempting Festival TTS as fallback"
+        if speak_with_festival "$message"; then
+            debug_log "Festival TTS successful"
+            return 0
+        fi
+        echo -ne "$DIM_PURPLE[✗]$RESET"
+        debug_log "Festival TTS failed"
+    fi
+    
+    # All TTS methods failed
+    echo -ne "$DIM_PURPLE[🔊 No TTS]$RESET"
     return 1
 }
 
@@ -526,6 +2425,43 @@ toggle_sound_effects() {
     fi
 }
 
+# Function to toggle debug mode
+toggle_debug() {
+    if [ "$DEBUG_ENABLED" = true ]; then
+        DEBUG_ENABLED=false
+        show_property_change "Debug mode DISABLED" "Clean console output" "🔇"
+        play_sound_effect "confirm"
+    else
+        DEBUG_ENABLED=true
+        show_property_change "Debug mode ENABLED" "Verbose diagnostic output" "🐛"
+        play_sound_effect "confirm"
+        debug_log "Debug logging is now active"
+    fi
+}
+
+# Function to hush all audio processes
+hush() {
+    echo -e "$RED[🤫 Hushing all audio...]$RESET"
+    
+    # Kill all aplay processes
+    pkill -f "aplay" 2>/dev/null || true
+    
+    # Kill all CodeDeck TTS processes
+    pkill -f "curl.*codedeck.*tts" 2>/dev/null || true
+    
+    # Stop streaming speech system
+    stop_playback_coordinator
+    
+    # Clean up audio files
+    rm -f "$STREAMING_SPEECH_DIR"/tts_*.wav "$STREAMING_SPEECH_DIR"/tts_*.tmp 2>/dev/null || true
+    rm -f "$PLAYBACK_QUEUE_FILE" 2>/dev/null || true
+    
+    # Reset post-interrupt audio flag
+    POST_INTERRUPT_AUDIO=false
+    
+    echo -e "$GREEN[✓ All quiet now]$RESET"
+}
+
 # Function to generate hash for static messages
 get_message_hash() {
     local message="$1"
@@ -550,8 +2486,44 @@ chat_with_codedeck() {
     local message="$1"
     local response
     
-    # Reset interrupt flag
+    # Reset interrupt flags
     INTERRUPT_REQUESTED=false
+    POST_INTERRUPT_AUDIO=false
+    
+    # Initialize streaming speech for this conversation
+    if [ "$STREAMING_SPEECH_ENABLED" = true ]; then
+        init_streaming_speech
+    fi
+    
+    # Check battery for 18650-based systems (uConsole)
+    local current_battery
+    local raw_battery
+    current_battery=$(get_battery_percentage)
+    
+    # Check thresholds based on battery type
+    raw_battery=$(get_raw_battery_percentage)
+    
+    # If raw != massaged, we have a special battery system (like 18650)
+    if [ "$raw_battery" != "$current_battery" ]; then
+        # Use raw percentage for threshold check since massaged will be much lower
+        if [ -n "$raw_battery" ] && [ "$raw_battery" -lt 45 ]; then
+            local charging_status
+            charging_status=$(get_charging_status)
+            if ! [[ "$charging_status" =~ (Charging|AC\ Power|on-line) ]]; then
+                echo -e "$YELLOW⚠️  Battery at ${current_battery}% usable (${raw_battery}% raw) - voltage cutoff approaching$RESET"
+                echo -e "$YELLOW💡 Charge soon to avoid unexpected shutdown and boot failure$RESET"
+            fi
+        fi
+    else
+        # Standard battery check for regular systems
+        if [ -n "$current_battery" ] && [ "$current_battery" -lt 50 ]; then
+            local charging_status
+            charging_status=$(get_charging_status)
+            if ! [[ "$charging_status" =~ (Charging|AC\ Power|on-line) ]]; then
+                echo -e "$YELLOW⚠️  Battery at ${current_battery}% - consider charging$RESET"
+            fi
+        fi
+    fi
     
     # Play send sound effect
     play_sound_effect "send"
@@ -579,6 +2551,38 @@ chat_with_codedeck() {
     # Debug: Show what we're sending (comment out in production)
     # echo "DEBUG: Sending messages: $messages_json" >&2
     
+    # Try Silicon Pipeline routing first
+    local silicon_response_content=""
+    if [ "$ENABLE_SILICON_PIPELINE" = true ] && [ -n "$SILICON_ACTIVE_ENDPOINT" ] && [ -n "$SILICON_ACTIVE_MODEL" ]; then
+        debug_log "Attempting Silicon Pipeline routing..."
+        echo -ne "$SILICON_PURPLE[GLaDOS via Silicon] $RESET"
+        
+        # Route through Silicon Pipeline
+        local silicon_temp_content=$(mktemp)
+        if route_silicon_chat_streaming "$messages_json" "$silicon_temp_content"; then
+            # Silicon routing successful
+            silicon_response_content=$(cat "$silicon_temp_content" 2>/dev/null)
+            rm -f "$silicon_temp_content"
+            
+            # Add response to history and handle voice
+            if [ -n "$silicon_response_content" ]; then
+                MESSAGE_HISTORY+=("assistant:$silicon_response_content")
+                
+                if [ "$VOICE_ENABLED" = true ]; then
+                    speak_routine_message "silicon_response" "$silicon_response_content"
+                fi
+                
+                play_sound_effect "receive"
+                echo  # New line after completion
+                return 0
+            fi
+        else
+            # Silicon routing failed, try local fallback
+            debug_log "Silicon routing failed, falling back to local API"
+            rm -f "$silicon_temp_content"
+        fi
+    fi
+    
     # Make API call with constructed messages and capture streaming response
     echo -ne "$PURPLE[GLaDOS] $RESET"
     
@@ -588,6 +2592,26 @@ chat_with_codedeck() {
     local current_think_content=""
     local think_tag_type=""
     
+                        # Content length and completion tracking
+                    local char_count=0
+                    local max_chars=4000
+                    local length_exceeded=false
+                    local special_end_token="<END_OUTPUT>"
+                    local found_end_token=false
+    
+    # Think tag normalization tracking
+    local think_opens=0
+    local think_closes=0
+    local orphaned_close_handled=false
+    
+    # Loop detection variables
+    local loop_detected=false
+    local loop_suffix=". Oh, I appear to be in a loop, how embarrassing."
+    local recent_segments=()  # Array to store recent text segments
+    local segment_size=20     # Number of words to consider as a segment
+    local current_segment=""
+    local word_count=0
+    
     # Start generation in background and capture PID
     {
         curl -s -X POST "$CODEDECK_API/v1/chat/completions" \
@@ -596,13 +2620,15 @@ chat_with_codedeck() {
         -d "{
                 \"model\": \"$CURRENT_MODEL\",
                 \"messages\": $messages_json,
-                \"max_tokens\": 8192,
-            \"temperature\": 0.7,
+                \"max_tokens\": $max_chars, 
+            \"temperature\": $CURRENT_TEMPERATURE,
                 \"stream\": true
             }" 2>/dev/null | while IFS= read -r line; do
-                # Check for interrupt
-                if [ "$INTERRUPT_REQUESTED" = true ]; then
-                    break
+                # Check for interrupt, loop detection, or length exceeded
+                if [ "$INTERRUPT_REQUESTED" = true ] || [ "$loop_detected" = true ] || [ "$length_exceeded" = true ]; then
+                    # Exit the while loop immediately to stop processing
+                    # The parent process cleanup will handle killing curl
+                    exit 1
                 fi
                 
                 # Skip empty lines and non-data lines
@@ -630,17 +2656,48 @@ except:
     pass
 " 2>/dev/null)
                     
-                    # Process token with think-tag awareness
+                    # Process token with think-tag awareness and loop detection
                     if [ -n "$token" ]; then
+                        # Ticket 1: Check for length limit and end token
+                        char_count=$((char_count + ${#token}))
+                        
+                        # Check for special end token
+                        if [[ "$token" == *"$special_end_token"* ]]; then
+                            found_end_token=true
+                        fi
+                        
+                        # Check if we've exceeded length limit (unless end token found)
+                        if [ "$char_count" -gt "$max_chars" ] && [ "$found_end_token" = false ]; then
+                            if [ "$length_exceeded" = false ]; then
+                                length_exceeded=true
+                                echo -e "\n$YELLOW[⚠ Output limit reached (${max_chars} chars) - stopping generation...]$RESET"
+                                # The interrupt check above will handle killing the process
+                                # Just continue to let the main loop handle the termination
+                            fi
+                        fi
+                        
                         echo -n "$token" >> "$temp_content"
                         
-                        # Simple think-tag processing - check the accumulated content
+                        # Enhanced think-tag processing with normalization
                         local full_so_far
                         full_so_far=$(cat "$temp_content" 2>/dev/null)
                         
-                        # Count think tags to determine state
-                        local think_opens=$(echo "$full_so_far" | grep -o '<think>' | wc -l)
-                        local think_closes=$(echo "$full_so_far" | grep -o '</think>' | wc -l)
+                        # Count think tags for state tracking and normalization
+                        think_opens=$(echo "$full_so_far" | grep -o '<think>' | wc -l)
+                        think_closes=$(echo "$full_so_far" | grep -o '</think>' | wc -l)
+                        
+                        # Ticket 3: Handle orphaned </think> tag (assume <think> at start)
+                        if [ "$think_closes" -gt "$think_opens" ] && [ "$orphaned_close_handled" = false ]; then
+                            orphaned_close_handled=true
+                            # If we have a closing tag but no opening, treat from start as think content
+                            echo -ne "\n$DIM_PURPLE┌─ 💭 [ORPHANED THINK - FROM START] ─┐$RESET\n"
+                            echo -ne "$DIM_PURPLE│$RESET "
+                            # Process content before the </think> as think content
+                            local before_close=$(echo "$full_so_far" | sed 's/<\/think>.*//')
+                            if [ -n "$before_close" ]; then
+                                echo -ne "\e[3;96m$before_close\e[0m"  # Italic cyan for thoughts
+                            fi
+                        fi
                         
                         # Are we inside a think tag?
                         local inside_think=false
@@ -648,35 +2705,111 @@ except:
                             inside_think=true
                         fi
                         
-                        # Handle think tag transitions
+                        # Loop detection - check all content including think tags
+                        # Add words to current segment for loop detection
+                        current_segment="$current_segment$token"
+                        
+                        # Count words (simple approximation using spaces)
+                        local new_words=$(echo "$token" | grep -o ' ' | wc -l)
+                        word_count=$((word_count + new_words))
+                        
+                        # When we have enough words for a segment, check for loops
+                        if [ $word_count -ge $segment_size ]; then
+                            # Clean the segment (remove extra whitespace and normalize)
+                            local clean_segment=$(echo "$current_segment" | tr -s ' ' | xargs)
+                            
+                            if [ ${#clean_segment} -gt 10 ]; then  # Only check meaningful segments
+                                # Check if this segment appears in recent segments
+                                local repetition_count=1
+                                for prev_segment in "${recent_segments[@]}"; do
+                                    # Use fuzzy matching for loop detection (85% similarity)
+                                    local similarity=$(echo "$clean_segment" "$prev_segment" | python3 -c "
+import sys
+lines = sys.stdin.read().strip().split('\n')
+if len(lines) >= 1:
+    import difflib
+    parts = lines[0].split()
+    if len(parts) >= 2:
+        seg1 = ' '.join(parts[:len(parts)//2])
+        seg2 = ' '.join(parts[len(parts)//2:])
+        ratio = difflib.SequenceMatcher(None, seg1.lower(), seg2.lower()).ratio()
+        print(int(ratio * 100))
+    else:
+        print(0)
+else:
+    print(0)
+" 2>/dev/null)
+                                        
+                                        if [ "${similarity:-0}" -gt 85 ]; then
+                                            repetition_count=$((repetition_count + 1))
+                                        fi
+                                    done
+                                    
+                                    # If we found 3+ repetitions, trigger loop detection
+                                    if [ $repetition_count -ge 3 ]; then
+                                        loop_detected=true
+                                        echo -e "\n$YELLOW[⚠ Loop detected - halting generation]$RESET"
+                                        break
+                                    fi
+                                    
+                                    # Add to recent segments (keep last 5 segments)
+                                    recent_segments+=("$clean_segment")
+                                    if [ ${#recent_segments[@]} -gt 5 ]; then
+                                        recent_segments=("${recent_segments[@]:1}")  # Remove first element
+                                    fi
+                                fi
+                                
+                                # Reset for next segment
+                                current_segment=""
+                                word_count=0
+                            fi
+                        fi
+                        
+                        # Enhanced think tag transitions (Ticket 2: Normalized handling)
                         if [[ "$token" == *"<think>"* ]]; then
-                            echo -ne "\n$DIM_PURPLE💭 [Internal Thinking]$RESET\n"
+                            # Opening think tag
+                            if [ "$orphaned_close_handled" = false ]; then
+                                echo -ne "\n$DIM_PURPLE┌─ 💭 [INTERNAL COGNITIVE PROCESSING] ─┐$RESET\n"
+                                echo -ne "$DIM_PURPLE│$RESET "
+                            fi
                             # Print remaining content after <think> tag
                             local after_tag=$(echo "$token" | sed 's/.*<think>//')
                             if [ -n "$after_tag" ]; then
-                                echo -ne "\e[2;90m$after_tag\e[0m"
+                                echo -ne "\e[3;96m$after_tag\e[0m"  # Italic cyan for thoughts
                             fi
                         elif [[ "$token" == *"</think>"* ]]; then
-                            # Print content before </think> tag
-                            local before_tag=$(echo "$token" | sed 's/<\/think>.*//')
-                            if [ -n "$before_tag" ]; then
-                                echo -ne "\e[2;90m$before_tag\e[0m"
+                            # Closing think tag
+                            if [ "$orphaned_close_handled" = false ]; then
+                                # Normal closing tag
+                                local before_tag=$(echo "$token" | sed 's/<\/think>.*//')
+                                if [ -n "$before_tag" ]; then
+                                    echo -ne "\e[3;96m$before_tag\e[0m"  # Italic cyan for thoughts
+                                fi
+                                echo -ne "\n$DIM_PURPLE└────────────────────────────────────────┘$RESET\n"
+                                echo -ne "$PURPLE"
+                            else
+                                # This was an orphaned close tag, already handled above
+                                echo -ne "\n$DIM_PURPLE└────────────────────────────────────────┘$RESET\n"
+                                echo -ne "$PURPLE"
                             fi
-                            echo -ne "\n$PURPLE"
                             # Print remaining content after </think> tag
                             local after_tag=$(echo "$token" | sed 's/.*<\/think>//')
                             if [ -n "$after_tag" ]; then
                                 echo -ne "$after_tag"
+                                # Process for streaming speech (outside think tag)
+                                process_streaming_text_for_speech "$after_tag" false
                             fi
                         elif [ "$inside_think" = true ]; then
-                            # Inside think tag - use very dim gray
-                            echo -ne "\e[2;90m$token\e[0m"
+                            # Inside think tag - use italic cyan with visual boxing
+                            echo -ne "\e[3;96m$token\e[0m"
+                            # No streaming speech processing for think content
                         else
                             # Normal content - use regular purple
                             echo -ne "\e[35m$token\e[0m"
+                            # Process for streaming speech (normal content)
+                            process_streaming_text_for_speech "$token" false
                         fi
                     fi
-                fi
             done
     } &
     
@@ -687,16 +2820,42 @@ except:
     wait "$GENERATION_PID" 2>/dev/null
     local generation_exit_code=$?
     
-    # Reset generation PID and ensure clean terminal state only if needed
-    GENERATION_PID=""
-    if [ "$generation_exit_code" -ne 0 ] || [ "$INTERRUPT_REQUESTED" = true ]; then
+    # Enhanced process cleanup - kill all child processes if needed
+    if [ "$generation_exit_code" -ne 0 ] || [ "$INTERRUPT_REQUESTED" = true ] || [ "$length_exceeded" = true ] || [ "$loop_detected" = true ]; then
+        # Kill the background process group to stop curl and any child processes
+        if [ -n "$GENERATION_PID" ]; then
+            # Kill the process group (negative PID) to get curl and subprocesses
+            kill -TERM -"$GENERATION_PID" 2>/dev/null || true
+            sleep 0.1
+            # Force kill if still running
+            kill -KILL -"$GENERATION_PID" 2>/dev/null || true
+        fi
+        
+        # Also kill any remaining curl processes related to CodeDeck API
+        pkill -f "curl.*codedeck.*chat/completions" 2>/dev/null || true
+        
+        # Only kill audio if this was a double-interrupt (hush requested)
+        if [ "$POST_INTERRUPT_AUDIO" = false ]; then
+            # This was a double-interrupt, audio was already hushed
+            debug_log "Audio already hushed due to double interrupt"
+        else
+            # Single interrupt - let audio continue
+            debug_log "Single interrupt - allowing audio to continue playing"
+        fi
+        
+        # Reset terminal state only if needed
         if [ "$IS_SSH_SESSION" = true ]; then
             stty sane 2>/dev/null || true
         else
             stty echo 2>/dev/null || true
             stty icanon 2>/dev/null || true
         fi
+        
+        echo -e "$DIM_PURPLE[🛑 Generation and audio processes cleaned up]$RESET"
     fi
+    
+    # Reset generation PID
+    GENERATION_PID=""
     
     echo  # New line after completion
     
@@ -707,8 +2866,22 @@ except:
         rm -f "$temp_content"
     fi
     
-    # Only process if not interrupted
-    if [ "$INTERRUPT_REQUESTED" != true ] && [ -n "$full_content" ]; then
+    # Handle loop detection case
+    if [ "$loop_detected" = true ] && [ -n "$full_content" ]; then
+        # Add the embarrassing suffix
+        full_content="${full_content}${loop_suffix}"
+        echo -e "$PURPLE$loop_suffix$RESET"
+        
+        # Add assistant response to history
+        MESSAGE_HISTORY+=("assistant:$full_content")
+        
+        # Voice the response including the suffix if voice is enabled
+        if [ "$VOICE_ENABLED" = true ]; then
+            speak_routine_message "loop_response" "$full_content"
+        fi
+        
+    # Process if not manually interrupted (but allow length_exceeded and loop_detected)
+    elif [ "$INTERRUPT_REQUESTED" != true ] && [ -n "$full_content" ]; then
         # Add assistant response to history
         MESSAGE_HISTORY+=("assistant:$full_content")
         
@@ -716,14 +2889,59 @@ except:
         if [ "$VOICE_ENABLED" = true ]; then
             speak_routine_message "response" "$full_content"
         fi
+        
+        # Show status message for truncated content
+        if [ "$length_exceeded" = true ]; then
+            echo -e "$YELLOW[📏 Response was truncated at ${max_chars} characters]$RESET"
+        fi
+        
+        # Reset post-interrupt flag since normal processing completed
+        POST_INTERRUPT_AUDIO=false
     elif [ "$INTERRUPT_REQUESTED" = true ]; then
-        # Remove the user message from history since the exchange was interrupted
-        if [ ${#MESSAGE_HISTORY[@]} -gt 0 ]; then
-            unset 'MESSAGE_HISTORY[-1]'
+        # Handle interrupted generation - still process any content that was generated
+        if [ -n "$full_content" ]; then
+            # Add partial response to history for context
+            MESSAGE_HISTORY+=("assistant:$full_content")
+            
+            # If voice is enabled, speak the partial content (clean of think tags)
+            if [ "$VOICE_ENABLED" = true ]; then
+                echo -e "$DIM_PURPLE[🔊 Speaking partial response...]$RESET"
+                
+                # Clean the content for speech (remove think tags and markup)
+                local clean_content
+                clean_content=$(echo "$full_content" | python3 -c "
+import sys, re
+content = sys.stdin.read()
+# Remove think-tags and their content
+content = re.sub(r'<(think|thought|reasoning|plan|observe|critique)>.*?</\1>', '', content, flags=re.DOTALL | re.IGNORECASE)
+# Clean up extra whitespace
+content = re.sub(r'\s+', ' ', content).strip()
+print(content)
+")
+                
+                if [ -n "$clean_content" ]; then
+                    speak_routine_message "interrupted_response" "$clean_content"
+                else
+                    echo -e "$DIM_PURPLE[No speakable content after cleaning]$RESET"
+                fi
+            fi
+            
+            # Allow streaming speech to finish any queued sentences
+            if [ "$STREAMING_SPEECH_ENABLED" = true ]; then
+                echo -e "$DIM_PURPLE[🎙️ Completing streaming speech for generated content...]$RESET"
+                # Give streaming speech a moment to finish processing queued sentences
+                sleep 1
+            fi
+        else
+            # No content generated, remove the user message from history
+            if [ ${#MESSAGE_HISTORY[@]} -gt 0 ]; then
+                unset 'MESSAGE_HISTORY[-1]'
+            fi
         fi
         echo -e "$DIM_PURPLE[Generation stopped. You can continue the conversation normally.]$RESET"
     else
-        echo -e "$RED🔧 Connection to CODEDECK core failed. Is the service running?$RESET"
+        echo -e "$RED🔧 No AI endpoints available$RESET"
+        echo -e "$YELLOW💡 Check Silicon endpoints and/or local CodeDeck service$RESET"
         
         # Remove the user message from history since the exchange failed
         if [ ${#MESSAGE_HISTORY[@]} -gt 0 ]; then
@@ -979,7 +3197,7 @@ check_status() {
     status_response=$(curl -s "$CODEDECK_API/v1/status" 2>/dev/null)
     
     if [ $? -eq 0 ] && [ -n "$status_response" ]; then
-        echo -e "$GREEN[✓] CODEDECK Neural Interface is ONLINE$RESET"
+        echo -e "$GREEN[✓] Local CODEDECK API is ONLINE$RESET"
         echo "$status_response" | python3 -c "
 import sys, json
 try:
@@ -991,9 +3209,51 @@ except:
     print('📊 Raw response received but could not parse status')
 "
     else
-        echo -e "$RED[✗] CODEDECK Neural Interface is OFFLINE$RESET"
+        echo -e "$RED[✗] Local CODEDECK API is OFFLINE$RESET"
         echo -e "$YELLOW💡 Start the service with: sudo systemctl start codedeck.service$RESET"
     fi
+    
+    # Also check Silicon Pipeline status
+    echo ""
+    if [ "$ENABLE_SILICON_PIPELINE" = true ]; then
+        echo -e "$DIM_PURPLE[Checking Silicon Pipeline...]$RESET"
+        discover_silicon_endpoints_summary >/dev/null
+        local silicon_count=$?
+        
+        if [ $silicon_count -gt 0 ]; then
+            echo -e "$GREEN[✓] Silicon Pipeline: $silicon_count endpoint(s) available$RESET"
+            if [ -n "$SILICON_ACTIVE_ENDPOINT" ]; then
+                echo -e "$GREEN🌐 Active: $SILICON_ACTIVE_ENDPOINT ($SILICON_ACTIVE_MODEL)$RESET"
+            fi
+        else
+            echo -e "$YELLOW[⚠] Silicon Pipeline: No endpoints available$RESET"
+        fi
+    else
+        echo -e "$DIM_PURPLE[Silicon Pipeline: DISABLED]$RESET"
+    fi
+    
+    # Show operation mode summary
+    echo ""
+    local local_available=$([[ $? -eq 0 && -n "$status_response" ]] && echo true || echo false)
+    local silicon_available=$([[ "$ENABLE_SILICON_PIPELINE" = true && -n "$SILICON_ACTIVE_ENDPOINT" ]] && echo true || echo false)
+    
+    if [ "$local_available" = true ] && [ "$silicon_available" = true ]; then
+        echo -e "$GREEN🧠 Operation Mode: HYBRID (Silicon + Local)$RESET"
+        echo -e "$DIM_PURPLE   Requests will try Silicon first, then fallback to local$RESET"
+    elif [ "$silicon_available" = true ]; then
+        echo -e "$CYAN🧠 Operation Mode: SILICON ONLY$RESET"
+        echo -e "$DIM_PURPLE   All requests route through Silicon endpoints$RESET"
+    elif [ "$local_available" = true ]; then
+        echo -e "$YELLOW🧠 Operation Mode: LOCAL ONLY$RESET"
+        echo -e "$DIM_PURPLE   All requests use local CodeDeck API$RESET"
+    else
+        echo -e "$RED🧠 Operation Mode: NO AI AVAILABLE$RESET"
+        echo -e "$DIM_PURPLE   No AI endpoints are currently accessible$RESET"
+    fi
+    
+    echo ""
+    # Show detailed session status
+    show_session_status
 }
 
 # Function to list available personas
@@ -1133,34 +3393,153 @@ clear_context() {
     fi
 }
 
+# Function to set AI creativity/spontaneity level (temperature)
+set_mood() {
+    local new_temp="$1"
+    
+    if [ -z "$new_temp" ]; then
+        local temp_percentage=$(echo "$CURRENT_TEMPERATURE * 100" | bc 2>/dev/null | cut -d. -f1)
+        if [ -z "$temp_percentage" ]; then
+            temp_percentage=70
+        fi
+        echo -e "$GREEN[ℹ] Current AI mood: $temp_percentage% creative/spontaneous (temperature: $CURRENT_TEMPERATURE)$RESET"
+        echo -e "$DIM_PURPLE    Usage: mood <0-100> or mood <0.0-1.0> - Set AI creativity level$RESET"
+        echo -e "$DIM_PURPLE    Examples: mood 20 (logical), mood 50 (balanced), mood 80 (creative)$RESET"
+        return
+    fi
+    
+    # Convert percentage to decimal if needed
+    local decimal_temp="$new_temp"
+    if [[ "$new_temp" =~ ^[0-9]+$ ]] && [ "$new_temp" -ge 0 ] && [ "$new_temp" -le 100 ]; then
+        # It's a percentage, convert to decimal
+        decimal_temp=$(echo "scale=2; $new_temp / 100" | bc 2>/dev/null || echo "0.7")
+    elif [[ "$new_temp" =~ ^[0-9]*\.?[0-9]+$ ]]; then
+        # It's already decimal, validate range
+        if ! echo "$new_temp >= 0.0 && $new_temp <= 1.0" | bc -l 2>/dev/null | grep -q 1; then
+            echo -e "$RED[✗] Temperature must be between 0.0 and 1.0 (or 0-100 as percentage)$RESET"
+            return
+        fi
+        decimal_temp="$new_temp"
+    else
+        echo -e "$RED[✗] Invalid temperature format. Use 0-100 (percentage) or 0.0-1.0 (decimal)$RESET"
+        return
+    fi
+    
+    CURRENT_TEMPERATURE="$decimal_temp"
+    local display_percentage=$(echo "$decimal_temp * 100" | bc 2>/dev/null | cut -d. -f1)
+    if [ -z "$display_percentage" ]; then
+        display_percentage=70
+    fi
+    
+    play_sound_effect "confirm"
+    
+    # Descriptive mood based on temperature
+    local mood_desc="balanced"
+    if echo "$decimal_temp < 0.3" | bc -l 2>/dev/null | grep -q 1; then
+        mood_desc="logical & focused"
+    elif echo "$decimal_temp > 0.8" | bc -l 2>/dev/null | grep -q 1; then
+        mood_desc="highly creative & abstract"
+    elif echo "$decimal_temp > 0.6" | bc -l 2>/dev/null | grep -q 1; then
+        mood_desc="creative & spontaneous"
+    fi
+    
+    show_property_change "AI mood updated" "${display_percentage}% - $mood_desc" "🎭"
+    
+    if [ "$VOICE_ENABLED" = true ]; then
+        speak_routine_message "mood_updated_$display_percentage" "Mood adjusted to $display_percentage percent creativity."
+    fi
+}
+
 # Function to show current session status
 show_session_status() {
-    echo -e "$DIM_PURPLE"
-    echo "═══════════════════════════════════════════════════════════════"
-    echo "                     SESSION STATUS"
-    echo "═══════════════════════════════════════════════════════════════"
-    echo -e "$RESET"
+    echo -e "$DIM_PURPLE┌─── SESSION STATUS ───┐$RESET"
     
-    echo -e "$GREEN🧠 System Message:$RESET"
-    if [ -z "$SESSION_SYSTEM_MESSAGE" ]; then
-        echo -e "$DIM_PURPLE    (none set - using persona default)$RESET"
-    else
-        echo -e "$DIM_PURPLE    $SESSION_SYSTEM_MESSAGE$RESET"
+    # System & AI on one line
+    local temp_percentage=$(echo "$CURRENT_TEMPERATURE * 100" | bc 2>/dev/null | cut -d. -f1)
+    if [ -z "$temp_percentage" ]; then
+        temp_percentage=70
     fi
-    echo ""
-    
-    echo -e "$GREEN📚 Context Settings:$RESET"
-    echo -e "$DIM_PURPLE    Length: $CONTEXT_LENGTH message pairs$RESET"
-    echo -e "$DIM_PURPLE    History: ${#MESSAGE_HISTORY[@]} messages stored$RESET"
-    echo ""
-    
-    echo -e "$GREEN🔊 Voice Status:$RESET"
-    if [ "$VOICE_ENABLED" = true ]; then
-        echo -e "$DIM_PURPLE    ENABLED (GLaDOS voice)$RESET"
-    else
-        echo -e "$DIM_PURPLE    DISABLED (text only)$RESET"
+    local mood_desc="balanced"
+    if echo "$CURRENT_TEMPERATURE < 0.3" | bc -l 2>/dev/null | grep -q 1; then
+        mood_desc="logical"
+    elif echo "$CURRENT_TEMPERATURE > 0.8" | bc -l 2>/dev/null | grep -q 1; then
+        mood_desc="creative"
+    elif echo "$CURRENT_TEMPERATURE > 0.6" | bc -l 2>/dev/null | grep -q 1; then
+        mood_desc="spontaneous"
     fi
-    echo ""
+    
+    echo -e "$GREEN🤖$RESET Model: $CURRENT_MODEL"
+    echo -e "$GREEN🎭$RESET Mood: ${temp_percentage}% ($mood_desc) | $GREEN📚$RESET Context: $CONTEXT_LENGTH pairs (${#MESSAGE_HISTORY[@]} stored)"
+    
+    # System message (compact)
+    if [ -n "$SESSION_SYSTEM_MESSAGE" ]; then
+        echo -e "$GREEN🧠$RESET System: ${SESSION_SYSTEM_MESSAGE:0:50}..."
+    else
+        echo -e "$GREEN🧠$RESET System: (default)"
+    fi
+    
+    # Audio status on one line
+    local voice_status="OFF"
+    local stream_status="OFF" 
+    local sound_status="OFF"
+    local debug_status="OFF"
+    
+    [ "$VOICE_ENABLED" = true ] && voice_status="ON"
+    [ "$STREAMING_SPEECH_ENABLED" = true ] && stream_status="ON"
+    [ "$SOUND_ENABLED" = true ] && sound_status="ON"
+    [ "$DEBUG_ENABLED" = true ] && debug_status="ON"
+    
+    # Determine operation mode for status
+    local local_api_available=false
+    local silicon_available=false
+    
+    # Check local API availability (quick check)
+    if curl -s --connect-timeout 2 "$CODEDECK_API/v1/status" >/dev/null 2>&1; then
+        local_api_available=true
+    fi
+    
+    # Check Silicon availability
+    if [ "$ENABLE_SILICON_PIPELINE" = true ] && [ -n "$SILICON_ACTIVE_ENDPOINT" ]; then
+        silicon_available=true
+    fi
+    
+    # Determine operation mode
+    local operation_mode=""
+    if [ "$local_api_available" = true ] && [ "$silicon_available" = true ]; then
+        operation_mode="HYBRID (Silicon + Local)"
+    elif [ "$silicon_available" = true ]; then
+        operation_mode="SILICON ONLY"
+    elif [ "$local_api_available" = true ]; then
+        operation_mode="LOCAL ONLY"
+    else
+        operation_mode="NO AI AVAILABLE"
+    fi
+    
+    echo -e "$GREEN🔊$RESET Voice:$voice_status | Stream:$stream_status | Sound:$sound_status | Debug:$debug_status"
+    echo -e "$GREEN🧠$RESET Mode:$operation_mode | $GREEN🌐$RESET Active:${SILICON_ACTIVE_ENDPOINT:-"Local API"}"
+    
+    # System health (compact)
+    local battery_percent
+    battery_percent=$(get_battery_percentage)
+    local cpu_temp
+    cpu_temp=$(get_cpu_temperature)
+    
+    local battery_display="N/A"
+    if [ -n "$battery_percent" ]; then
+        local charging_status
+        charging_status=$(get_charging_status)
+        local charge_icon=""
+        [[ "$charging_status" =~ (Charging|AC\ Power|on-line) ]] && charge_icon="⚡"
+        battery_display="${battery_percent}%${charge_icon}"
+    fi
+    
+    local cpu_display="N/A"
+    if [ -n "$cpu_temp" ]; then
+        cpu_display="${cpu_temp}°C"
+    fi
+    
+    echo -e "$GREEN🔋$RESET Battery: $battery_display | $GREEN🌡️$RESET CPU: $cpu_display"
+    echo -e "$DIM_PURPLE└────────────────────────┘$RESET"
 }
 
 # Function to list and select models
@@ -1171,38 +3550,310 @@ manage_models() {
     if [ "$action" = "list" ] || [ -z "$action" ]; then
         echo -e "$DIM_PURPLE[Scanning available neural models...]$RESET"
         
+        # Create unified model list with continuous numbering
+        local unified_models=$(mktemp)
+        local model_index=1
+        local silicon_model_count=0
+        local total_silicon_endpoints=0
+        
+        # Build complete unified model list first
+        if [ "$ENABLE_SILICON_PIPELINE" = true ]; then
+            # Collect Silicon models with continuous numbering
+            for endpoint in "${SILICON_ENDPOINTS[@]}"; do
+                if check_silicon_endpoint "$endpoint"; then
+                    local models
+                    models=$(get_silicon_models "$endpoint")
+                    
+                    if [ -n "$models" ]; then
+                        total_silicon_endpoints=$((total_silicon_endpoints + 1))
+                        local priority_marker=""
+                        if [ "$endpoint" = "$SILICON_ACTIVE_ENDPOINT" ]; then
+                            priority_marker=" [PRIORITY]"
+                        fi
+                        
+                        # Add header for this endpoint
+                        echo "SILICON_HEADER|📡 $endpoint$priority_marker" >> "$unified_models"
+                        
+                        while IFS= read -r model; do
+                            if [ -n "$model" ]; then
+                                local current_marker=""
+                                if [ "$model" = "$SILICON_ACTIVE_MODEL" ] && [ "$endpoint" = "$SILICON_ACTIVE_ENDPOINT" ]; then
+                                    current_marker=" <- CURRENT"
+                                fi
+                                
+                                echo "SILICON|$model_index|$model|$endpoint|$current_marker" >> "$unified_models"
+                                model_index=$((model_index + 1))
+                                silicon_model_count=$((silicon_model_count + 1))
+                            fi
+                        done <<< "$models"
+                        
+                        echo "SEPARATOR|" >> "$unified_models"
+                    fi
+                fi
+            done
+        fi
+        
+        # Add local models to unified list
         local models_response
         models_response=$(curl -s "$CODEDECK_API/v1/models" 2>/dev/null)
         
         if [ $? -eq 0 ] && [ -n "$models_response" ]; then
+            # Add local models header and models to unified list
+            echo "LOCAL_HEADER|🏠 CodeDeck Local API" >> "$unified_models"
+            
             echo "$models_response" | python3 -c "
 import sys, json
 try:
     data = json.load(sys.stdin)
     models = data.get('data', [])
-    print(f'Available models ({len(models)} found):')
+    
+    start_index = $model_index  # Continue from where Silicon left off
+    
+    # Write models to unified temp file
     for i, model in enumerate(models):
         name = model.get('id', 'unknown')
         desc = model.get('description', 'No description')
         loaded = model.get('loaded', False)
         status = '🟢 LOADED' if loaded else '⚪ Available'
         current = ' <- CURRENT' if name == '$CURRENT_MODEL' else ''
-        print(f'  {i+1}. {status} {name}{current}')
-        print(f'     {desc}')
-    print()
-    print('Usage: model select <name> - Load and switch to a model')
+        model_num = start_index + i
+        print(f'LOCAL|{model_num}|{status}|{name}|{desc}|{current}')
+    
+    print(f'TOTAL_COUNT:{len(models)}', file=sys.stderr)
 except Exception as e:
-    print('Could not parse models list')
-    print(f'Error: {e}', file=sys.stderr)
-"
+    print('ERROR:Could not parse models list', file=sys.stderr)
+    print(f'ERROR:{e}', file=sys.stderr)
+" 2>"$unified_models.log" >>"$unified_models"
+            
+            # Check for errors
+            if grep -q "ERROR:" "$unified_models.log" 2>/dev/null; then
+                echo -e "$RED[✗] Could not parse models list$RESET"
+                cat "$unified_models.log" | grep "ERROR:" | sed 's/ERROR://'
+                rm -f "$unified_models" "$unified_models.log"
+                return
+            fi
+            
+            # Get total local count
+            local local_count
+            local_count=$(grep "TOTAL_COUNT:" "$unified_models.log" 2>/dev/null | cut -d: -f2)
+            local_count=${local_count:-0}
         else
-            echo -e "$RED[✗] Could not retrieve models list$RESET"
+            local_count=0
         fi
+        
+        # Display unified models list with proper pagination
+        local total_models=$((silicon_model_count + local_count))
+        
+        if [ "$total_models" -eq 0 ]; then
+            echo -e "$RED❌ No models available from any source$RESET"
+            echo -e "$YELLOW💡 Check Silicon endpoints and/or local CodeDeck service$RESET"
+            rm -f "$unified_models" "$unified_models.log"
+            return
+        fi
+        
+        echo ""
+        echo -e "$DIM_PURPLE┌─────────────────── UNIFIED MODEL LIST ─────────────────────┐$RESET"
+        echo -e "$DIM_PURPLE│ Found $total_models total models ($silicon_model_count Silicon + $local_count Local)$RESET"
+        echo -e "$DIM_PURPLE└─────────────────────────────────────────────────────────────┘$RESET"
+        echo ""
+        
+        # Paginate the unified output (show 10 items at a time including headers)
+        local items_per_page=10
+        local current_line=1
+        local total_lines
+        total_lines=$(wc -l < "$unified_models")
+        local page_num=1
+        
+        while [ "$current_line" -le "$total_lines" ]; do
+            # Show page header
+            echo -e "$CYAN────────────────── Page $page_num ──────────────────$RESET"
+            
+            # Show next batch of models (count actual items displayed)
+            local items_shown=0
+            local start_line=$current_line
+            
+            while [ "$current_line" -le "$total_lines" ] && [ "$items_shown" -lt "$items_per_page" ]; do
+                local line
+                line=$(sed -n "${current_line}p" "$unified_models")
+                
+                if [ -n "$line" ]; then
+                    IFS='|' read -r type field1 field2 field3 field4 field5 <<< "$line"
+                    
+                    case "$type" in
+                        "SILICON_HEADER")
+                            echo -e "$SILICON_GREEN$field1$RESET"
+                            items_shown=$((items_shown + 1))
+                            ;;
+                        "LOCAL_HEADER")
+                            echo -e "$PURPLE$field1$RESET"
+                            items_shown=$((items_shown + 1))
+                            ;;
+                        "SILICON")
+                            echo -e "$SILICON_PURPLE  $field1. 🔥 $field2$field4$RESET"
+                            items_shown=$((items_shown + 1))
+                            ;;
+                        "LOCAL")
+                            echo -e "$CYAN  $field1. $field2 $field3$field5$RESET"
+                            echo -e "$DIM_PURPLE     $field4$RESET"
+                            items_shown=$((items_shown + 1))
+                            ;;
+                        "SEPARATOR")
+                            echo ""
+                            ;;
+                    esac
+                fi
+                
+                current_line=$((current_line + 1))
+            done
+            
+            # Show pagination controls if there are more models
+            if [ "$current_line" -le "$total_lines" ]; then
+                echo ""
+                echo -e "$YELLOW[Press any key for next page...]$RESET"
+                read -n 1 -s
+                echo ""
+                page_num=$((page_num + 1))
+            fi
+        done
+        
+        echo ""
+        echo -e "$DIM_PURPLE┌─────────────────────────────────────────────────────┐$RESET"
+        echo -e "$DIM_PURPLE│ UNIFIED MODEL SELECTION:$RESET"
+        echo -e "$DIM_PURPLE│   model select 3              - Select any model #3$RESET"
+        echo -e "$DIM_PURPLE│   model select deepseek_r1    - Select by name$RESET"
+        echo -e "$DIM_PURPLE│   silicon endpoints           - Choose priority endpoint$RESET"
+        echo -e "$DIM_PURPLE└─────────────────────────────────────────────────────┘$RESET"
+        
+        # Clean up temp files
+        rm -f "$unified_models" "$unified_models.log"
         
     elif [ "$action" = "select" ]; then
         if [ -z "$model_name" ]; then
-            echo -e "$YELLOW[!] Usage: model select <model_name>$RESET"
+            echo -e "$YELLOW[!] Usage: model select <model_name_or_number>$RESET"
+            echo -e "$DIM_PURPLE    Examples:$RESET"
+            echo -e "$DIM_PURPLE      model select 1                    - Select first model$RESET"
+            echo -e "$DIM_PURPLE      model select deepseek_r1_distill  - Select by name$RESET"
             return
+        fi
+        
+        # Check if model_name is a number (unified index selection)
+        if [[ "$model_name" =~ ^[0-9]+$ ]]; then
+            echo -e "$DIM_PURPLE[Resolving unified model index #$model_name...]$RESET"
+            
+            # Build unified model list to resolve index
+            local unified_models=$(mktemp)
+            local model_index=1
+            local silicon_model_count=0
+            local found_model=""
+            local is_silicon=false
+            
+            # Collect Silicon models first
+            if [ "$ENABLE_SILICON_PIPELINE" = true ]; then
+                for endpoint in "${SILICON_ENDPOINTS[@]}"; do
+                    if check_silicon_endpoint "$endpoint"; then
+                        local models
+                        models=$(get_silicon_models "$endpoint")
+                        
+                        if [ -n "$models" ]; then
+                            while IFS= read -r model; do
+                                if [ -n "$model" ]; then
+                                    if [ "$model_index" -eq "$model_name" ]; then
+                                        found_model="$model"
+                                        found_endpoint="$endpoint"
+                                        is_silicon=true
+                                        break 2
+                                    fi
+                                    model_index=$((model_index + 1))
+                                    silicon_model_count=$((silicon_model_count + 1))
+                                fi
+                            done <<< "$models"
+                        fi
+                    fi
+                done
+            fi
+            
+            # If not found in Silicon, check local models
+            if [ -z "$found_model" ]; then
+                local models_response
+                models_response=$(curl -s "$CODEDECK_API/v1/models" 2>/dev/null)
+                
+                if [ $? -eq 0 ] && [ -n "$models_response" ]; then
+                    found_model=$(echo "$models_response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    models = data.get('data', [])
+    target_index = int('$model_name') - $silicon_model_count - 1  # Adjust for Silicon models
+    
+    if 0 <= target_index < len(models):
+        print(models[target_index].get('id', ''))
+    else:
+        print('')
+except:
+    print('')
+")
+                fi
+            fi
+            
+            if [ -z "$found_model" ]; then
+                echo -e "$RED[✗] Invalid model index: $model_name$RESET"
+                echo -e "$YELLOW💡 Use 'model list' to see available models$RESET"
+                rm -f "$unified_models"
+                return
+            fi
+            
+            if [ "$is_silicon" = true ]; then
+                echo -e "$GREEN[✓ Model #$model_name resolved to Silicon: $found_model on $found_endpoint]$RESET"
+                
+                # Validate endpoint and model before switching
+                echo -e "$DIM_PURPLE[Validating Silicon endpoint and model...]$RESET"
+                debug_log "Checking Silicon endpoint: $found_endpoint"
+                if check_silicon_endpoint "$found_endpoint"; then
+                    local available_models
+                    available_models=$(get_silicon_models "$found_endpoint")
+                    
+                    if echo "$available_models" | grep -q "^${found_model}$"; then
+                        # Model validated successfully - proceed with switch
+                        debug_log "Model validation successful: $found_model found on $found_endpoint"
+                        SILICON_ACTIVE_ENDPOINT="$found_endpoint"
+                        SILICON_ACTIVE_MODEL="$found_model"
+                        CURRENT_MODEL="$found_model"
+                        debug_log "Setting Silicon variables and announcing status"
+                        announce_silicon_status "connected"
+                        play_sound_effect "switch"
+                        show_property_change "Silicon model switched" "$found_model @ ${found_endpoint##*/}" "🧠"
+                        if [ "$VOICE_ENABLED" = true ]; then
+                            speak_routine_message "silicon_model_switched" "Silicon model $found_model loaded."
+                        fi
+                        rm -f "$unified_models"
+                        return 0
+                    else
+                        echo -e "$RED[✗] Model '$found_model' no longer available on $found_endpoint$RESET"
+                        echo -e "$YELLOW💡 Model may have been unloaded. Try 'model list' to see current options$RESET"
+                        rm -f "$unified_models"
+                        return 1
+                    fi
+                else
+                    echo -e "$RED[✗] Silicon endpoint $found_endpoint is no longer accessible$RESET"
+                    echo -e "$YELLOW💡 Endpoint may be offline. Try 'silicon endpoints' to check status$RESET"
+                    rm -f "$unified_models"
+                    return 1
+                fi
+            else
+                echo -e "$GREEN[✓ Model #$model_name resolved to Local: $found_model]$RESET"
+                model_name="$found_model"
+            fi
+            
+            rm -f "$unified_models"
+        else
+            # Try by name - check Silicon first, then local
+            if [ "$ENABLE_SILICON_PIPELINE" = true ]; then
+                echo -e "$DIM_PURPLE[Trying Silicon endpoints...]$RESET"
+                if select_silicon_model_by_name_or_index "$model_name"; then
+                    return 0  # Success with Silicon
+                fi
+            fi
+            echo -e "$DIM_PURPLE[Trying local API...]$RESET"
         fi
         
         echo -e "$DIM_PURPLE[Loading neural model: $model_name]$RESET"
@@ -1244,9 +3895,10 @@ except:
         
     else
         echo -e "$YELLOW[!] Usage:$RESET"
-        echo -e "$DIM_PURPLE    model           - List available models$RESET"
-        echo -e "$DIM_PURPLE    model list      - List available models$RESET"
-        echo -e "$DIM_PURPLE    model select <name> - Load and switch to model$RESET"
+        echo -e "$DIM_PURPLE    model                    - List available models$RESET"
+        echo -e "$DIM_PURPLE    model list               - List available models$RESET"
+        echo -e "$DIM_PURPLE    model select <name>      - Load and switch to model by name$RESET"
+        echo -e "$DIM_PURPLE    model select <number>    - Load and switch to model by index$RESET"
     fi
 }
 
@@ -1264,6 +3916,9 @@ show_help() {
     echo "   status           - Check CODEDECK service status"
     echo "   battery          - Show battery status and check warnings"
     echo "   session          - Show current session status"
+    echo "   silicon          - Show Silicon Pipeline status"
+    echo "   silicon toggle   - Enable/disable remote neural mesh"
+    echo "   silicon endpoints - Select priority Silicon endpoint"
     echo -e "$RESET"
     echo -e "$YELLOW[Press any key to continue...]$RESET"
     read -n 1 -s
@@ -1272,13 +3927,15 @@ show_help() {
     echo "👤 PERSONAS & MODELS:"
     echo "   personas         - List available consciousness modules"
     echo "   switch <name>    - Switch AI persona (glados, coder, writer)"
-    echo "   model            - List available models"
-    echo "   model select <n> - Load and switch to a specific model"
+    echo "   model            - List available models (paginated)"
+    echo "   model select <n> - Load model by index number (e.g., model select 3)"
+    echo "   model select <name> - Load model by name (e.g., model select deepseek_r1)"
     echo ""
     echo "🧠 CONTEXT MANAGEMENT:"
     echo "   system <msg>     - Set system message for this session"
     echo "   system clear     - Remove current system message"
     echo "   system           - Show current system message"
+    echo "   mood <0-100>     - Set AI creativity (0=logical, 100=creative)"
     echo -e "$RESET"
     echo -e "$YELLOW[Press any key to continue...]$RESET"
     read -n 1 -s
@@ -1291,12 +3948,19 @@ show_help() {
     echo ""
     echo "🔊 AUDIO:"
     echo "   speak            - Toggle voice responses (text + audio)"
+    echo "   stream-speech    - Toggle real-time sentence-based speech streaming"
     echo "   sound            - Toggle sound effects (UI feedback sounds)"
+    echo "   hush             - Stop all audio playback"
     echo "   hear             - Record 10s of audio and convert to text input"
     echo "   audio-diag       - Run comprehensive audio system diagnostics"
+    echo "   tts-diag         - Run TTS (speech synthesis) diagnostics"
+    echo "   voice [list]     - List available voice models for Piper TTS"
+    echo "   voice set <name> - Set voice model (e.g., voice set en_US-GlaDOS-medium)"
+    echo "   voice current    - Show current voice model and location"
     echo ""
     echo "🎮 INTERFACE:"
     echo "   cls              - Clear the console display"
+    echo "   debug            - Toggle debug/diagnostic output"
     echo "   recover/fix      - Fix input issues / recover terminal state"
     echo "   cache-purge      - Delete all cached voice clips (free space)"
     echo "   exit/quit/q      - Exit the console"
@@ -1315,7 +3979,14 @@ init_console() {
 EOF
     echo -e "$RESET"
     echo ""
+    echo -e "$DIM_PURPLE🔁🔄 Initializing contextual recursion engine…$RESET"
     echo -e "$DIM_PURPLE𓁹 GLaDOS consciousness module loaded...$RESET"
+    
+    # Initialize Silicon Pipeline if enabled
+    if [ "$ENABLE_SILICON_PIPELINE" = true ]; then
+        echo -e "$DIM_PURPLE🧠 Initializing Silicon Pipeline neural mesh...$RESET"
+        start_silicon_monitor
+    fi
     
     # Play startup sound
     play_sound_effect "start"
@@ -1328,12 +3999,18 @@ EOF
     
     echo -e "$PURPLE[GLaDOS] Well, well, well. Look who's decided to interface with me directly.$RESET"
     echo -e "$DIM_PURPLE💡 Type 'help' for available commands$RESET"
-    echo -e "$DIM_PURPLE🎨 Colors: $BRIGHT_ORANGE[Your messages]$DIM_PURPLE, $PURPLE[AI replies]$DIM_PURPLE, $CYAN[Think-tags with cool effects]$RESET"
+    echo -e "$DIM_PURPLE🎨 Colors: $BRIGHT_ORANGE[Your messages]$DIM_PURPLE, $PURPLE[Local AI]$DIM_PURPLE, $SILICON_PURPLE[Silicon AI]$DIM_PURPLE, $CYAN[Think-tags]$RESET"
     
     # Voice status
     local voice_status="$RED[DISABLED]"
     if [ "$VOICE_ENABLED" = true ]; then
         voice_status="$GREEN[ENABLED]"
+    fi
+    
+    # Streaming speech status
+    local stream_status="$RED[DISABLED]"
+    if [ "$STREAMING_SPEECH_ENABLED" = true ]; then
+        stream_status="$GREEN[ENABLED]"
     fi
     
     # Sound effects status
@@ -1342,9 +4019,48 @@ EOF
         sound_status="$RED[DISABLED]"
     fi
     
-    echo -e "$DIM_PURPLE🔊 Voice: $voice_status$DIM_PURPLE - Type 'speak' to toggle | 🎵 Sound: $sound_status$DIM_PURPLE - Type 'sound' to toggle$RESET"
-    echo -e "$DIM_PURPLE📚 Context: $CONTEXT_LENGTH pairs | 🧠 System: ${SESSION_SYSTEM_MESSAGE:-"(default)"} | 🤖 Model: $CURRENT_MODEL$RESET"
-    echo ""
+    # Debug status
+    local debug_status="$RED[DISABLED]"
+    if [ "$DEBUG_ENABLED" = true ]; then
+        debug_status="$GREEN[ENABLED]"
+    fi
+    
+    echo -e "$DIM_PURPLE🔊 Voice: $voice_status$DIM_PURPLE - Type 'speak' to toggle | 🎙️ Stream: $stream_status$DIM_PURPLE - Type 'stream-speech' to toggle$RESET"
+    echo -e "$DIM_PURPLE🎵 Sound: $sound_status$DIM_PURPLE - Type 'sound' to toggle | 🐛 Debug: $debug_status$DIM_PURPLE - Type 'debug' to toggle$RESET"
+    
+    # Determine operation mode
+    local operation_mode=""
+    local local_api_available=false
+    local silicon_available=false
+    
+    # Check local API availability
+    if curl -s --connect-timeout 2 "$CODEDECK_API/v1/status" >/dev/null 2>&1; then
+        local_api_available=true
+    fi
+    
+    # Check Silicon availability
+    if [ "$ENABLE_SILICON_PIPELINE" = true ] && [ -n "$SILICON_ACTIVE_ENDPOINT" ]; then
+        silicon_available=true
+    fi
+    
+    # Determine mode
+    if [ "$local_api_available" = true ] && [ "$silicon_available" = true ]; then
+        operation_mode="$GREEN[HYBRID: Silicon + Local]$RESET"
+    elif [ "$silicon_available" = true ]; then
+        operation_mode="$CYAN[SILICON ONLY: ${SILICON_ACTIVE_ENDPOINT##*/}]$RESET"
+    elif [ "$local_api_available" = true ]; then
+        operation_mode="$YELLOW[LOCAL ONLY]$RESET"
+    else
+        operation_mode="$RED[NO AI AVAILABLE]$RESET"
+    fi
+    
+    echo -e "$DIM_PURPLE🧠 Mode: $operation_mode$DIM_PURPLE | 📚 Context: $CONTEXT_LENGTH pairs | 🤖 Model: $CURRENT_MODEL$RESET"
+    
+    local temp_percentage=$(echo "$CURRENT_TEMPERATURE * 100" | bc 2>/dev/null | cut -d. -f1)
+    if [ -z "$temp_percentage" ]; then
+        temp_percentage=70
+    fi
+    echo -e "$DIM_PURPLE🎭 Mood: ${temp_percentage}% creativity - Type 'mood' to adjust | 🧠 System: ${SESSION_SYSTEM_MESSAGE:-"(default)"}$RESET"
 }
 
 # ── VOICE RECORDING FUNCTIONS ──
@@ -1376,7 +4092,7 @@ audio_diagnostics() {
     fi
     
     if [ "$tools_ok" = false ]; then
-        echo -e "$YELLOW  💡 Install with: sudo apt install alsa-utils$RESET"
+        echo -e "$YELLOW  💡 Install alsa-utils with your package manager$RESET"
         return 1
     fi
     
@@ -1537,6 +4253,175 @@ audio_diagnostics() {
     fi
 }
 
+# Function to run TTS diagnostics
+tts_diagnostics() {
+    echo -e "$DIM_PURPLE"
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "                    TTS SYSTEM DIAGNOSTICS"
+    echo "═══════════════════════════════════════════════════════════════"
+    echo -e "$RESET"
+    
+    echo -e "$CYAN[1/4] Checking TTS engines...$RESET"
+    
+    # Check Piper
+    local piper_exec
+    piper_exec=$(find_piper_executable)
+    if [ $? -eq 0 ]; then
+        echo -e "$GREEN  ✓ Piper found: $piper_exec$RESET"
+        
+        # Check Piper version
+        local piper_version
+        piper_version=$("$piper_exec" --version 2>/dev/null || echo "unknown")
+        echo -e "$GREEN    Version: $piper_version$RESET"
+        
+        # Check for voice models
+        local voice_count=0
+        local voice_paths=(
+            "$VOICE_MODELS_DIR"
+            "/usr/share/piper/voices"
+            "/usr/local/share/piper/voices"
+            "$HOME/.local/share/piper/voices"
+            "$(dirname "$piper_exec")/../share/voices"
+            "$VIRTUAL_ENV/share/piper/voices"
+            "$CODEDECK_VENV_PATH/share/piper/voices"
+        )
+        
+        for voice_dir in "${voice_paths[@]}"; do
+            if [ -n "$voice_dir" ] && [ -d "$voice_dir" ]; then
+                local voices=$(find "$voice_dir" -name "*.onnx" 2>/dev/null | wc -l)
+                if [ "$voices" -gt 0 ]; then
+                    voice_count=$((voice_count + voices))
+                    echo -e "$GREEN    Found $voices voice(s) in $voice_dir$RESET"
+                fi
+            fi
+        done
+        
+        # Also check for any .onnx files in common locations
+        local additional_voices
+        local search_paths=("$HOME/.local/share")
+        [ -n "$VIRTUAL_ENV" ] && search_paths+=("$VIRTUAL_ENV")
+        [ -n "$CODEDECK_VENV_PATH" ] && search_paths+=("$CODEDECK_VENV_PATH")
+        
+        additional_voices=$(find "${search_paths[@]}" -name "*.onnx" 2>/dev/null | wc -l)
+        if [ "$additional_voices" -gt 0 ]; then
+            voice_count=$((voice_count + additional_voices))
+            echo -e "$GREEN    Found $additional_voices additional voice(s) in user/venv directories$RESET"
+        fi
+        
+        if [ "$voice_count" -eq 0 ]; then
+            echo -e "$YELLOW    ⚠ No voice models found - Piper may not work$RESET"
+            echo -e "$DIM_PURPLE      Download voices from: https://github.com/rhasspy/piper/releases$RESET"
+        else
+            echo -e "$GREEN    Total voices available: $voice_count$RESET"
+        fi
+    else
+        echo -e "$YELLOW  ⚠ Piper not found$RESET"
+        echo -e "$DIM_PURPLE    Install with: pip install piper-tts$RESET"
+        echo -e "$DIM_PURPLE    Or activate virtual environment containing Piper$RESET"
+    fi
+    
+    # Check Festival
+    if command -v festival >/dev/null 2>&1; then
+        echo -e "$GREEN  ✓ Festival found: $(which festival)$RESET"
+    else
+        echo -e "$YELLOW  ⚠ Festival not found$RESET"
+        echo -e "$DIM_PURPLE    Install Festival with your package manager$RESET"
+    fi
+    
+    echo ""
+    echo -e "$CYAN[2/4] Testing CodeDeck API TTS...$RESET"
+    local api_status
+    api_status=$(curl -s --connect-timeout 5 "$CODEDECK_API/v1/status" 2>/dev/null)
+    
+    if [ $? -eq 0 ] && [ -n "$api_status" ]; then
+        echo -e "$GREEN  ✓ CodeDeck API accessible$RESET"
+        
+        # Test TTS endpoint
+        local tts_test
+        tts_test=$(curl -s --connect-timeout 5 -I "$CODEDECK_API/v1/tts/speak" 2>/dev/null | head -1)
+        
+        if echo "$tts_test" | grep -q "200\|405\|400"; then
+            echo -e "$GREEN  ✓ TTS endpoint accessible$RESET"
+        else
+            echo -e "$YELLOW  ⚠ TTS endpoint may not be available$RESET"
+        fi
+    else
+        echo -e "$RED  ✗ CodeDeck API not accessible at $CODEDECK_API$RESET"
+    fi
+    
+    echo ""
+    echo -e "$CYAN[3/4] Testing TTS hierarchy...$RESET"
+    
+    # Test each TTS method with a simple message
+    local test_message="TTS test"
+    
+    if find_piper_executable >/dev/null 2>&1; then
+        echo -ne "$DIM_PURPLE  Testing Piper..."
+        local temp_piper="/tmp/piper_test_$(date +%s).wav"
+        if speak_with_piper "$test_message" "$temp_piper"; then
+            echo -e " ✓$RESET"
+            rm -f "$temp_piper"
+        else
+            echo -e " ✗$RESET"
+        fi
+    fi
+    
+    echo -ne "$DIM_PURPLE  Testing API..."
+    local temp_api="/tmp/api_test_$(date +%s).wav"
+    if curl -s -X POST "$CODEDECK_API/v1/tts/speak" \
+        -H "Content-Type: application/json" \
+        -d "{\"text\": \"$test_message\", \"voice\": \"glados\", \"audio_file\": true}" \
+        -o "$temp_api" 2>/dev/null && [ -s "$temp_api" ]; then
+        
+        if ! head -c 1 "$temp_api" 2>/dev/null | grep -q "{"; then
+            echo -e " ✓$RESET"
+        else
+            echo -e " ✗ (got JSON error)$RESET"
+        fi
+    else
+        echo -e " ✗$RESET"
+    fi
+    rm -f "$temp_api"
+    
+    if command -v festival >/dev/null 2>&1; then
+        echo -ne "$DIM_PURPLE  Testing Festival..."
+        if echo "$test_message" | festival --tts >/dev/null 2>&1; then
+            echo -e " ✓$RESET"
+        else
+            echo -e " ✗$RESET"
+        fi
+    fi
+    
+    echo ""
+    echo -e "$CYAN[4/4] Current TTS priority order:$RESET"
+    echo -e "$DIM_PURPLE  1. 🤖 Piper (local, high quality)$RESET"
+    echo -e "$DIM_PURPLE  2. 🌐 CodeDeck API (GLaDOS voice)$RESET"
+    echo -e "$DIM_PURPLE  3. 🎭 Festival (local fallback)$RESET"
+    
+    echo ""
+    echo -e "$DIM_PURPLE═══════════════════════════════════════════════════════════════$RESET"
+    echo -e "$GREEN✓ TTS DIAGNOSTICS COMPLETE$RESET"
+    echo -e "$DIM_PURPLE═══════════════════════════════════════════════════════════════$RESET"
+    
+    # Show recommendation
+    local tts_capability
+    tts_capability=$(check_tts_capabilities)
+    
+    case "$tts_capability" in
+        "piper")
+            echo -e "$GREEN🤖 Recommended: Piper is available and preferred$RESET"
+            ;;
+        "festival")
+            echo -e "$YELLOW🎭 Fallback: Only Festival available locally$RESET"
+            echo -e "$DIM_PURPLE💡 Consider installing Piper for better quality$RESET"
+            ;;
+        "none")
+            echo -e "$RED❌ No local TTS available$RESET"
+            echo -e "$YELLOW💡 Install Festival with your package manager$RESET"
+            ;;
+    esac
+}
+
 # Function to detect recording device (simplified version)
 detect_recording_device() {
     # Find USB Audio device from arecord -l
@@ -1567,7 +4452,7 @@ hear_command() {
         return 1
     fi
     
-    echo -e "$GREEN[✓ Using device: $recording_device]$RESET"
+    debug_log "Using recording device: $recording_device"
     
     # Ensure recording cache directory exists and create temp file
     mkdir -p "$RECORDING_CACHE_DIR" 2>/dev/null
@@ -1723,6 +4608,8 @@ while true; do
     case "$command" in
         "exit"|"quit"|"q")
             echo -e "$DIM_PURPLE[GLaDOS] Goodbye. Try not to miss me too much.$RESET"
+            cleanup_streaming_speech
+            stop_silicon_monitor
             echo -e "$PURPLE𐑄⟁⌁ Console session terminated ⌁⟁𐑄$RESET"
             break
             ;;
@@ -1764,6 +4651,9 @@ while true; do
         "speak")
             toggle_voice
             ;;
+        "stream-speech")
+            toggle_streaming_speech
+            ;;
         "system")
             if [ "$args" != "$command" ]; then
                 set_system_message "$args"
@@ -1778,6 +4668,13 @@ while true; do
                 set_context_length ""
             fi
             ;;
+        "mood")
+            if [ "$args" != "$command" ]; then
+                set_mood "$args"
+            else
+                set_mood ""
+            fi
+            ;;
         "clear")
             clear_context
             ;;
@@ -1787,6 +4684,12 @@ while true; do
             ;;
         "sound")
             toggle_sound_effects
+            ;;
+        "debug")
+            toggle_debug
+            ;;
+        "hush")
+            hush
             ;;
         "recover"|"fix")
             recover_terminal_state
@@ -1801,6 +4704,72 @@ while true; do
         "audio-diag")
             audio_diagnostics
             ;;
+        "tts-diag")
+            tts_diagnostics
+            ;;
+        "voice")
+            if [ "$args" != "$command" ]; then
+                # Parse voice subcommand
+                voice_action=$(echo "$args" | awk '{print $1}')
+                voice_name=$(echo "$args" | cut -d' ' -f2-)
+                if [ "$voice_name" = "$voice_action" ]; then
+                    voice_name=""
+                fi
+                
+                case "$voice_action" in
+                    "list")
+                        list_voice_models
+                        ;;
+                    "set")
+                        if [ -n "$voice_name" ]; then
+                            set_voice_model "$voice_name"
+                        else
+                            echo -e "$YELLOW[!] Usage: voice set <voice_name>$RESET"
+                        fi
+                        ;;
+                    "current")
+                        echo -e "$BRIGHT_CYAN🎙️ Current voice: $CURRENT_VOICE$RESET"
+                        local current_path
+                        current_path=$(get_current_voice_model)
+                        if [ $? -eq 0 ]; then
+                            echo -e "$DIM_PURPLE    Location: $current_path$RESET"
+                        else
+                            echo -e "$YELLOW⚠ Voice model not found in any location!$RESET"
+                        fi
+                        ;;
+                    *)
+                        echo -e "$YELLOW[!] Usage: voice [list|set <name>|current]$RESET"
+                        ;;
+                esac
+            else
+                list_voice_models
+            fi
+            ;;
+        "battery-debug")
+            debug_18650_detection
+            ;;
+        "silicon")
+            if [ "$args" != "$command" ]; then
+                # Parse silicon subcommand
+                silicon_action=$(echo "$args" | awk '{print $1}')
+                case "$silicon_action" in
+                    "status")
+                        show_silicon_status
+                        ;;
+                    "toggle")
+                        toggle_silicon_pipeline
+                        ;;
+                    "endpoints")
+                        select_silicon_endpoint
+                        ;;
+                    *)
+                        echo -e "$YELLOW[!] Usage: silicon [status|toggle|endpoints]$RESET"
+                        ;;
+                esac
+            else
+                show_silicon_status
+            fi
+            ;;
         *)
             # Chat with current AI persona (user message display now handled in function)
             chat_with_codedeck "$user_input"
@@ -1808,3 +4777,5 @@ while true; do
             ;;
     esac
 done 
+
+# Function to play sound effects in background

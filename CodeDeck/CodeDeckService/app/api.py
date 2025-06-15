@@ -545,14 +545,18 @@ def create_api_router() -> APIRouter:
     # Text-to-Speech Endpoints
     
     @router.post("/v1/tts/speak")
-    async def speak_text(request: dict):
-        """Send text to piper TTS engine and play through aplay"""
+    async def speak_text(request: dict, http_request: Request):
+        """Send text to piper TTS engine and play through aplay, or return audio bytes if requested"""
         try:
             text = request.get("text")
             voice = request.get("voice", "en_US-GlaDOS-medium")
             
             if not text:
                 raise HTTPException(status_code=400, detail="Text not provided")
+            
+            # Check if client wants audio file bytes instead of local playback
+            accept_header = http_request.headers.get("accept", "").lower()
+            return_audio_bytes = "audio/wav" in accept_header
             
             # Clean up text for TTS processing
             text = text.strip()
@@ -606,17 +610,47 @@ def create_api_router() -> APIRouter:
                     "--output_file", temp_file_path
                 ]
                 
-                # Run piper with text input
+                # Run piper with text input (with timeout to prevent hanging)
                 with open(text_file_path, 'r') as text_input:
                     process = subprocess.run(
                         piper_cmd,
                         stdin=text_input,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
+
                         check=True
                     )
                 
-                # Play the audio file
+                # Clean up text file immediately
+                try:
+                    os.unlink(text_file_path)
+                except:
+                    pass
+                
+                # If client wants audio bytes, return them
+                if return_audio_bytes:
+                    try:
+                        with open(temp_file_path, 'rb') as audio_file:
+                            audio_data = audio_file.read()
+                        
+                        # Clean up temp audio file
+                        try:
+                            os.unlink(temp_file_path)
+                        except:
+                            pass
+                        
+                        # Return audio file bytes
+                        from fastapi.responses import Response
+                        return Response(
+                            content=audio_data,
+                            media_type="audio/wav",
+                            headers={"Content-Disposition": "inline; filename=speech.wav"}
+                        )
+                    except Exception as e:
+                        logger.error(f"Error reading audio file: {e}")
+                        raise HTTPException(status_code=500, detail="Failed to read generated audio")
+                
+                # Original behavior: play locally and return JSON status
                 aplay_cmd = ["aplay", temp_file_path]
                 subprocess.Popen(
                     aplay_cmd,
@@ -625,10 +659,11 @@ def create_api_router() -> APIRouter:
                 )
                 
                 # Schedule cleanup
-                asyncio.create_task(cleanup_temp_files([temp_file_path, text_file_path]))
+                asyncio.create_task(cleanup_temp_files([temp_file_path]))
                 
                 return {"status": "success", "message": "TTS processing started", "voice": voice_name}
                 
+
             except subprocess.CalledProcessError as e:
                 logger.error(f"Error processing TTS with piper: {e.stderr.decode() if e.stderr else str(e)}")
                 raise HTTPException(status_code=500, detail=f"TTS processing error: {str(e)}")
@@ -641,10 +676,11 @@ def create_api_router() -> APIRouter:
     
     @router.post("/v1/tts/generate")
     async def generate_audio_file(request: dict):
-        """Generate audio file from text using piper TTS engine"""
+        """Generate audio file from text using piper TTS engine, return path or audio bytes"""
         try:
             text = request.get("text")
             voice = request.get("voice", "en_US-GlaDOS-medium")
+            audio_file = request.get("audio_file", False)  # Return audio bytes if True
             
             if not text:
                 raise HTTPException(status_code=400, detail="Text not provided")
@@ -723,7 +759,30 @@ def create_api_router() -> APIRouter:
                 except:
                     pass
                 
-                # Return the path to the audio file relative to static dir
+                # If client wants audio bytes, return them directly
+                if audio_file:
+                    try:
+                        with open(output_path, 'rb') as audio_file_handle:
+                            audio_data = audio_file_handle.read()
+                        
+                        # Clean up the generated file
+                        try:
+                            os.unlink(output_path)
+                        except:
+                            pass
+                        
+                        # Return audio file bytes
+                        from fastapi.responses import Response
+                        return Response(
+                            content=audio_data,
+                            media_type="audio/wav",
+                            headers={"Content-Disposition": "inline; filename=speech.wav"}
+                        )
+                    except Exception as e:
+                        logger.error(f"Error reading generated audio file: {e}")
+                        raise HTTPException(status_code=500, detail="Failed to read generated audio")
+                
+                # Default behavior: return the path to the audio file relative to static dir
                 return {
                     "status": "success", 
                     "audio_path": f"/static/audio/{output_filename}",
